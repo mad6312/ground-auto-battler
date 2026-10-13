@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>グラウンド・オートバトラー</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <!-- ================= 画面ヘッダー ================= -->
+    <header id="game-header">
+        <div class="header-left">
+            <h1>グラウンド・オートバトラー</h1>
+            <span id="round-indicator" class="hidden">ラウンド: 1</span>
+            <!-- 5-1: 次の対戦相手の表示 -->
+            <span id="next-opponent-indicator" class="next-opponent-badge hidden">次の対戦相手: 未定</span>
+        </div>
+
+        <!-- 待機中アナウンスメッセージ -->
+        <div id="wait-announcement-banner" class="announcement-banner hidden">
+            全員の準備完了を待っています...
+        </div>
+
+        <div class="header-right">
+            <button id="btn-open-tips" class="btn header-btn">💡 Tips</button>
+            <button id="btn-open-settings" class="btn header-btn">⚙ 設定</button>
+        </div>
+    </header>
+
+    <!-- ================= 1. ロビー画面 ================= -->
+    <main id="view-lobby" class="view-section">
+        <div class="lobby-card">
+            <h2>ゲームロビー</h2>
+            <div class="status-box">
+                <p>現在の参加人数: <span id="lobby-entry-count">0</span> / 10</p>
+                <div id="lobby-entry-badge" class="badge">未エントリー</div>
+            </div>
+
+            <div class="lobby-actions">
+                <button id="btn-toggle-entry" class="btn primary">参加する</button>
+                <button id="btn-start-game" class="btn success hidden">ゲーム開始</button>
+            </div>
+
+            <div class="player-list-section">
+                <h3>参加プレイヤー一覧</h3>
+                <ul id="lobby-player-list" class="player-list"></ul>
+            </div>
+        </div>
+    </main>
+
+    <!-- ================= 2. メインゲーム画面 ================= -->
+    <main id="view-game" class="view-section hidden">
+        <!-- 画面上部：他プレイヤー一覧 -->
+        <section id="opponents-bar" class="opponents-container">
+            <!-- 他プレイヤー枠が動的に生成されます -->
+        </section>
+
+        <!-- 画面中央：ショップ / 解雇市場 & 出撃選択エリア -->
+        <section id="center-board">
+            <div class="tab-controls">
+                <button id="tab-shop" class="tab-btn active">ショップ</button>
+                <button id="tab-market" class="tab-btn disabled-tab" disabled>解雇市場 (R2～)</button>
+            </div>
+
+            <!-- ショップエリア -->
+            <div id="shop-panel" class="market-panel">
+                <div class="shop-header">
+                    <span class="shop-title">陳列カード（右クリックでロック／ドラッグで購入・合成・出撃配置）</span>
+                    <button id="btn-reroll" class="btn warning">リロール (2G)</button>
+                </div>
+                <div id="shop-cards" class="card-grid center-aligned"></div>
+            </div>
+
+            <!-- 解雇市場エリア -->
+            <div id="market-panel" class="market-panel hidden">
+                <div class="shop-header">
+                    <span class="shop-title">解雇市場（他プレイヤーが解雇したカード／ドラッグで購入・合成・出撃配置）</span>
+                </div>
+                <div id="market-cards" class="card-grid center-aligned"></div>
+            </div>
+
+            <!-- 出撃カード選択スロット -->
+            <div id="deployment-panel" class="deployment-box">
+                <h3>バトルフェーズに繰り出すカードを選択してください (右クリックで手札に戻す)</h3>
+                <div class="slots-container">
+                    <div class="deploy-slot" data-slot="0">
+                        <span class="slot-num">1</span>
+                        <div class="slot-dropzone" id="deploy-0"></div>
+                    </div>
+                    <div class="deploy-slot" data-slot="1">
+                        <span class="slot-num">2</span>
+                        <div class="slot-dropzone" id="deploy-1"></div>
+                    </div>
+                    <div class="deploy-slot" data-slot="2">
+                        <span class="slot-num">3</span>
+                        <div class="slot-dropzone" id="deploy-2"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 画面下部：自陣エリア -->
+        <section id="player-dashboard">
+            <div class="dashboard-info">
+                <div class="player-status-line">
+                    <span id="player-name-display" class="player-name">プレイヤー名</span>
+                    <span id="player-life-display" class="player-life">♥♥♥♥♥</span>
+                    <span id="player-gold-display" class="player-gold">20G</span>
+                    <span id="player-ready-lamp" class="ready-lamp" title="待機状態ランプ"></span>
+                </div>
+                <div class="dashboard-controls">
+                    <div id="discard-dropzone" class="discard-box" title="手札カードをドロップして売却">
+                        🗑 解雇エリア (売却)
+                    </div>
+                    <button id="btn-finish-prep" class="btn primary large">完了</button>
+                </div>
+            </div>
+
+            <!-- 手札エリア -->
+            <div class="hand-wrapper">
+                <div class="hand-header">手札 (同種族・同レアリティを重ねて合成)</div>
+                <div id="player-hand" class="hand-container center-aligned"></div>
+            </div>
+        </section>
+    </main>
+
+    <!-- ================= 3. バトルフェーズ・シミュレーション画面 ================= -->
+    <div id="battle-screen" class="modal-overlay hidden">
+        <div class="battle-box">
+            <div class="battle-header-bar">
+                <h2 id="battle-view-title">バトルフェーズ</h2>
+                <span id="spectating-badge" class="badge hidden">👁 観戦中</span>
+            </div>
+
+            <div class="battle-arena">
+                <div class="combatant-column left-side" id="p1-column">
+                    <div class="combatant-fixed-info">
+                        <div class="combatant-name" id="b-p1-name">あなた</div>
+                        <div id="p1-cards-indicator" class="cards-remaining-indicator">●●●</div>
+                    </div>
+                    <div class="combatant-anim-slot" id="p1-combatant">
+                        <div class="card-slot" id="b-p1-card-slot"></div>
+                    </div>
+                </div>
+
+                <div class="battle-vs">VS</div>
+
+                <div class="combatant-column right-side" id="p2-column">
+                    <div class="combatant-fixed-info">
+                        <div class="combatant-name" id="b-p2-name">相手</div>
+                        <div id="p2-cards-indicator" class="cards-remaining-indicator">●●●</div>
+                    </div>
+                    <div class="combatant-anim-slot" id="p2-combatant">
+                        <div class="card-slot" id="b-p2-card-slot"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="battle-log-container">
+                <div id="battle-log-list" class="log-list"></div>
+            </div>
+
+            <div class="battle-controls">
+                <button id="btn-skip-battle" class="btn btn-skip">バトルをスキップ</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 4. バトルリザルト画面 (6-1: 収まり改善) ================= -->
+    <div id="result-modal" class="modal-overlay hidden">
+        <div class="modal-content medium result-modal-scroll-layout">
+            <div class="result-modal-header">
+                <h2 id="result-title">対戦結果</h2>
+                <p id="result-summary-text"></p>
+            </div>
+
+            <div class="result-modal-body">
+                <div class="result-damage-list">
+                    <h3>戦闘ダメージ詳細</h3>
+                    <table id="result-damage-table" class="data-table result-cards-table">
+                        <thead>
+                            <tr>
+                                <th>攻撃カード</th>
+                                <th>対象カード</th>
+                                <th>与えた合計ダメージ</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+
+                <div class="result-log-section">
+                    <button id="btn-toggle-result-log" class="btn secondary small">ログを表示 ▼</button>
+                    <div id="result-log-drawer" class="log-drawer hidden">
+                        <div id="result-log-list" class="log-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-actions result-modal-footer">
+                <button id="btn-result-next" class="btn primary">次へ</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 5. 最終リザルト画面 ================= -->
+    <div id="game-over-modal" class="modal-overlay hidden">
+        <div class="modal-content large">
+            <h2>最終順位結果</h2>
+
+            <div id="winner-celebration" class="winner-box hidden">
+                <div class="crown-icon">👑</div>
+                <div class="winner-title">VICTORY</div>
+                <div id="winner-name-display" class="winner-name">優勝者名</div>
+            </div>
+
+            <table id="final-ranking-table" class="data-table">
+                <thead>
+                    <tr>
+                        <th>順位</th>
+                        <th>プレイヤー名</th>
+                        <th>残りライフ</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+            <div class="modal-actions">
+                <button id="btn-rematch" class="btn success">再戦</button>
+                <button id="btn-leave" class="btn danger">退出</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 6. Tipsモーダル (1-3: サイズ固定) ================= -->
+    <div id="modal-tips" class="modal-overlay hidden">
+        <div class="modal-content large tips-modal-box tips-modal-fixed">
+            <div class="tips-header">
+                <h2>💡 Tips (ガイド)</h2>
+                <div class="tips-tabs">
+                    <button id="tip-tab-element" class="tab-btn active">属性</button>
+                    <button id="tip-tab-tribe" class="tab-btn">種族</button>
+                    <button id="tip-tab-synth" class="tab-btn">合成</button>
+                </div>
+            </div>
+
+            <div class="tips-scroll-content">
+                <!-- 属性タブ -->
+                <div id="tip-content-element" class="tips-panel">
+                    <div class="element-relations-container">
+                        <div class="element-relation-card">
+                            <h4>【属性相性図 1】</h4>
+                            <div class="relation-cycle">
+                                <span class="elem-badge elem-火">火</span> ➔
+                                <span class="elem-badge elem-氷">氷</span> ➔
+                                <span class="elem-badge elem-風">風</span> ➔
+                                <span class="elem-badge elem-火">火</span>
+                            </div>
+                            <p class="relation-note">火は氷に強く、氷は風に強く、風は火に強い。</p>
+                        </div>
+                        <div class="element-relation-card">
+                            <h4>【属性相性図 2】</h4>
+                            <div class="relation-cycle">
+                                <span class="elem-badge elem-雷">雷</span> ➔
+                                <span class="elem-badge elem-水">水</span> ➔
+                                <span class="elem-badge elem-地">地</span> ➔
+                                <span class="elem-badge elem-雷">雷</span>
+                            </div>
+                            <p class="relation-note">雷は水に強く、水は地に強く、地は雷に強い。</p>
+                        </div>
+                    </div>
+                    <div class="tips-description-box">
+                        <p>属性は、攻撃時の弱点・耐性判定に関与します。</p>
+                        <p><strong>弱点属性への攻撃：</strong> 攻撃側が与えるダメージが2倍になります。</p>
+                        <p><strong>耐性属性への攻撃：</strong> 攻撃側が与えるダメージが1/2になります。</p>
+                    </div>
+                </div>
+
+                <!-- 種族タブ -->
+                <div id="tip-content-tribe" class="tips-panel hidden">
+                    <p class="tips-intro-text">
+                        手札に同種族カードが2枚以上ある場合、その種族のカードが1枚増えるごとに、対象スタッツの補正倍率が10%または5%ずつ上昇します。
+                    </p>
+                    <table class="data-table tips-table">
+                        <thead>
+                            <tr>
+                                <th>種族</th>
+                                <th>補正対象スタッツ</th>
+                                <th>補正倍率</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>ドワーフ</td>
+                                <td>HP</td>
+                                <td>10%</td>
+                            </tr>
+                            <tr>
+                                <td>ドラゴン</td>
+                                <td>攻撃</td>
+                                <td>10%</td>
+                            </tr>
+                            <tr>
+                                <td>エルフ</td>
+                                <td>素早さ</td>
+                                <td>10%</td>
+                            </tr>
+                            <tr>
+                                <td>オーク</td>
+                                <td>HP・攻撃</td>
+                                <td>5%</td>
+                            </tr>
+                            <tr>
+                                <td>ヴァンパイア</td>
+                                <td>HP・素早さ</td>
+                                <td>5%</td>
+                            </tr>
+                            <tr>
+                                <td>リザードマン</td>
+                                <td>攻撃・素早さ</td>
+                                <td>5%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 合成タブ (1-1: 新レイアウト適用) -->
+                <div id="tip-content-synth" class="tips-panel hidden">
+                    <p class="tips-intro-text">レアリティと種族が同じカード同士は合成することができます。</p>
+
+                    <div class="synth-example-container">
+                        <div class="synth-col">
+                            <span class="synth-label">合成元</span>
+                            <div class="card-item rarity-common non-interactive">
+                                <div class="card-row-meta">
+                                    <span class="elem-badge elem-火">火</span>
+                                    <span class="card-tribe-name">エルフ</span>
+                                </div>
+                                <div class="card-row-stats-head">
+                                    <span class="badge-star">★1</span>
+                                    <span class="card-cost">2G</span>
+                                </div>
+                                <div class="card-name">焔刃のエルフ (Flameblade Elf)</div>
+                                <div class="card-stats">
+                                    <span class="stat-hp">❤2</span>
+                                    <span class="stat-atk">⚔1</span>
+                                    <span class="stat-spd">⚡7</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="synth-op">＋</div>
+
+                        <div class="synth-col">
+                            <span class="synth-label">素材</span>
+                            <div class="card-item rarity-common non-interactive">
+                                <div class="card-row-meta">
+                                    <span class="elem-badge elem-氷">氷</span>
+                                    <span class="card-tribe-name">エルフ</span>
+                                </div>
+                                <div class="card-row-stats-head">
+                                    <span class="badge-star">★1</span>
+                                    <span class="card-cost">2G</span>
+                                </div>
+                                <div class="card-name">霜精のエルフ (Frost-Spirited Elf)</div>
+                                <div class="card-stats">
+                                    <span class="stat-hp">❤1</span>
+                                    <span class="stat-atk">⚔3</span>
+                                    <span class="stat-spd">⚡6</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="synth-op">＝</div>
+
+                        <div class="synth-col">
+                            <span class="synth-label">合成後</span>
+                            <div class="card-item rarity-common non-interactive synth-highlight-gold">
+                                <div class="card-row-meta">
+                                    <span class="elem-badge elem-火">火</span>
+                                    <span class="card-tribe-name">エルフ</span>
+                                </div>
+                                <div class="card-row-stats-head">
+                                    <span class="badge-star">★2</span>
+                                    <span class="card-cost">2G</span>
+                                </div>
+                                <div class="card-name">焔刃のエルフ (Flameblade Elf)</div>
+                                <div class="card-stats">
+                                    <span class="stat-hp">❤3</span>
+                                    <span class="stat-atk">⚔4</span>
+                                    <span class="stat-spd">⚡13</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tips-description-box">
+                        <p>合成の素材にするカードを、合成元にするカードへドラッグ＆ドロップすることで、合成後のカードの各スタッツがそれぞれの合計値になります。</p>
+                        <p>また、カード名・レアリティ・属性・種族は、合成元カードの情報が引き継がれます。</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button id="btn-tips-close" class="btn secondary">閉じる</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 手札超過 解雇選択モーダル -->
+    <div id="modal-overhand" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h3>手札が7枚以上あります</h3>
+            <p>手札が6枚以下になるまで解雇するカードを選択してください。</p>
+            <div id="overhand-card-list" class="card-selection-grid center-aligned"></div>
+        </div>
+    </div>
+
+    <!-- 確認用モーダル (汎用) -->
+    <div id="modal-confirm" class="modal-overlay hidden">
+        <div class="modal-content small">
+            <p id="modal-confirm-msg" class="confirm-message-text"></p>
+            <div class="modal-actions">
+                <button id="btn-confirm-yes" class="btn primary">はい</button>
+                <button id="btn-confirm-no" class="btn secondary">いいえ</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 前ラウンド情報確認モーダル -->
+    <div id="modal-history" class="modal-overlay hidden">
+        <div class="modal-content medium">
+            <h3 id="history-player-name">前ラウンド情報</h3>
+            <h4>繰り出したカード順</h4>
+            <div id="history-lineup" class="card-grid center-aligned history-card-grid"></div>
+            <h4>控えカード</h4>
+            <div id="history-bench" class="card-grid center-aligned history-card-grid"></div>
+            <div class="modal-actions">
+                <button id="btn-history-close" class="btn secondary">閉じる</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 設定モーダル -->
+    <div id="modal-settings" class="modal-overlay hidden">
+        <div class="modal-content small">
+            <h3>設定</h3>
+            <div class="form-group setting-name-group">
+                <label for="input-player-name">名前:</label>
+                <input type="text" id="input-player-name" maxlength="16" />
+                <button id="btn-save-name" class="btn small primary nowrap-btn">変更</button>
+            </div>
+            <div id="host-admin-actions" class="hidden">
+                <hr />
+                <button id="btn-force-end" class="btn danger full">ゲームを強制終了 (ホスト専用)</button>
+            </div>
+            <div class="modal-actions">
+                <button id="btn-settings-close" class="btn secondary">閉じる</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="client.js"></script>
+</body>
+
+</html>
