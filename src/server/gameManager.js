@@ -1,11 +1,11 @@
 /**
  * src/server/gameManager.js
- * プレイヤーおよび全体ゲーム状態の管理モジュール (要件改修版)
+ * プレイヤーおよび全体ゲーム状態の管理モジュール (仕様改修版)
  */
 
-const { createRandomShopCard, createRandomDistributedCard, TRIBE_BONUSES } = require('../../cardsData');
+const { createRandomShopCard, createRandomDistributedCard, TRIBE_BONUSES, RARITY_SETTINGS } = require('../../cardsData');
 
-// 3: 手札自動整列の順序定義
+// 手札自動整列の順序定義
 const RARITY_ORDER = { common: 1, uncommon: 2, rare: 3, epic: 4, legend: 5 };
 const TRIBE_ORDER = { 'ドワーフ': 1, 'ドラゴン': 2, 'エルフ': 3, 'オーク': 4, 'ヴァンパイア': 5, 'リザードマン': 6 };
 const ELEMENT_ORDER = { '火': 1, '氷': 2, '風': 3, '雷': 4, '水': 5, '地': 6 };
@@ -43,17 +43,18 @@ function calculatePlayerTribeBuffedCards(cardsToBuff, allPlayerCards) {
         if (count >= 2 && TRIBE_BONUSES[c.tribe]) {
             const bonus = TRIBE_BONUSES[c.tribe];
             const factor = 1 + (count - 1) * bonus.factor;
+            // 4: 小数点以下四捨五入に変更
             if (bonus.target.includes('hp')) {
-                c.hp = Math.floor(c.hp * factor);
+                c.hp = Math.round(c.hp * factor);
                 c.maxHp = c.hp;
                 c.isHpBuffed = true;
             }
             if (bonus.target.includes('atk')) {
-                c.atk = Math.floor(c.atk * factor);
+                c.atk = Math.round(c.atk * factor);
                 c.isAtkBuffed = true;
             }
             if (bonus.target.includes('spd')) {
-                c.spd = Math.floor(c.spd * factor);
+                c.spd = Math.round(c.spd * factor);
                 c.isSpdBuffed = true;
             }
         }
@@ -223,7 +224,7 @@ class GameManager {
             const distCard = createRandomDistributedCard(1);
             distCard.isNewDistributed = true;
             p.hand.push(distCard);
-            p.sortHand(); // 3: 自動整列
+            p.sortHand();
         });
     }
 
@@ -248,7 +249,7 @@ class GameManager {
             const distCard = createRandomDistributedCard(this.round);
             distCard.isNewDistributed = true;
             p.hand.push(distCard);
-            p.sortHand(); // 3: 自動整列
+            p.sortHand();
         });
     }
 
@@ -260,9 +261,13 @@ class GameManager {
             if (benchCards.length === 0) break;
 
             const target = benchCards[Math.floor(Math.random() * benchCards.length)];
+
+            // 2: 解雇ゴールド計算方式の変更（購入額 × ★ / 2 または 4、小数点以下切り捨て）
+            const cost = RARITY_SETTINGS[target.rarity] ? RARITY_SETTINGS[target.rarity].cost : (target.cost || 2);
+            const stars = target.starCount || 1;
             const gainGold = target.isMarketCard
-                ? Math.floor(target.totalStats / 20)
-                : Math.floor(target.totalStats / 10);
+                ? Math.floor((cost * stars) / 4)
+                : Math.floor((cost * stars) / 2);
 
             p.gold += gainGold;
             p.hand = p.hand.filter(c => c.uid !== target.uid);

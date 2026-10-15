@@ -1,6 +1,6 @@
 /**
  * public/js/main.js
- * クライアント側メインエントリーモジュール (不具合根本修正版)
+ * クライアント側メインエントリーモジュール (仕様改修版)
  */
 
 import { state, dom, socket, formatLife, showConfirm, clearAllBattleTimers } from './state.js';
@@ -31,7 +31,7 @@ const WEAKNESS_MAP = {
     '地': '水'
 };
 
-// 2: 各ラウンド開始時のポップアップ制御フラグ
+// 各ラウンド開始時のポップアップ制御フラグ
 let isRoundPopupPlaying = false;
 let currentDistributeCardUid = null;
 
@@ -182,7 +182,7 @@ function renderOpponentsBar() {
     });
 }
 
-// 2: 各ラウンド開始時のポップアップ演出と配布アニメーション順序制御
+// 各ラウンド開始時のポップアップ演出と配布アニメーション順序制御
 function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
     const popup = document.getElementById('round-start-popup');
     const title = document.getElementById('round-popup-title');
@@ -194,14 +194,12 @@ function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
     isRoundPopupPlaying = true;
     popup.classList.remove('hidden');
 
-    // ポップアップ中は手札UIから配布カードのDOMを確実に隠しておく
     renderHand(syncLineupChanges, { hideCardUid: currentDistributeCardUid });
 
     setTimeout(() => {
         popup.classList.add('hidden');
         isRoundPopupPlaying = false;
 
-        // ポップアップ終了後に初めて手札UIに追加・描画
         renderHand(syncLineupChanges);
 
         if (currentDistributeCardUid) {
@@ -222,7 +220,7 @@ function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
 }
 
 // ============================
-// 1, 3: カスタムポインタードラッグのドロップ処理
+// カスタムポインタードラッグのドロップ処理
 // ============================
 setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
     if (!dropTarget || !dragData) return;
@@ -283,7 +281,6 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
         const targetCard = targetCardEl.__cardData;
 
         if (dragData.type === 'deploy') {
-            // 繰り出しUIから手札カードへ落とした場合は「入れ替え」
             state.localDeploySlots[dragData.slotIndex] = targetCard.uid;
             renderHand(syncLineupChanges);
             renderDeploySlots(syncLineupChanges);
@@ -301,11 +298,14 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
     }
 
     // ④ 手札コンテナ領域全体へのドロップ（購入・配置戻し）
-    const handArea = dropTarget.closest('#player-hand');
+    const handArea = dropTarget.closest('#player-hand') || dropTarget.closest('.hand-wrapper');
     if (handArea) {
         if (dragData.type === 'shop') {
+            // ドロップ座標を記録してアニメーション予約
+            state.pendingHandDropAnim = { x: dropPoint.x, y: dropPoint.y };
             socket.emit('shop:buy', { shopIndex: dragData.shopIndex });
         } else if (dragData.type === 'market') {
+            state.pendingHandDropAnim = { x: dropPoint.x, y: dropPoint.y };
             socket.emit('market:buy', { marketCardUid: dragData.marketCardUid });
         } else if (dragData.type === 'deploy') {
             state.localDeploySlots[dragData.slotIndex] = null;
@@ -313,13 +313,13 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
             renderDeploySlots(syncLineupChanges);
             syncLineupChanges();
 
-            // 3: ドロップしたマウス位置から手札整列位置への滑らか吸い込み
+            // 1: 出撃スロットから手札へのドロップ時：マウス位置から手札整列位置への滑らか吸い込み
             const targetEl = dom.playerHandContainer.querySelector(`[data-card-uid="${dragData.card.uid}"]`);
             if (targetEl) {
                 const targetRect = targetEl.getBoundingClientRect();
                 const startRect = {
-                    left: dropPoint.x - targetRect.width / 2,
-                    top: dropPoint.y - targetRect.height / 2,
+                    left: dropPoint.x - (targetRect.width / 2),
+                    top: dropPoint.y - (targetRect.height / 2),
                     width: targetRect.width,
                     height: targetRect.height
                 };
@@ -420,7 +420,6 @@ socket.on('game:sync', (data) => {
         dom.playerReadyLamp.classList.remove('ready');
 
         const aliveCount = state.cachedOpponentsList.filter(p => p.isAlive).length;
-        // 2: ラウンド1を含む各ラウンドでポップアップ演出を確実に実行
         triggerRoundStartPopupAndDistribute(state.currentRound, aliveCount);
     }
 
@@ -442,7 +441,6 @@ socket.on('game:sync', (data) => {
         dom.hostAdminActions.classList.add('hidden');
     }
 
-    // 3: 退出時やロビー状態の正確な画面切り替え
     if (state.currentGameState === 'lobby') {
         dom.viewLobby.classList.remove('hidden');
         dom.viewGame.classList.add('hidden');
@@ -465,6 +463,8 @@ socket.on('synthesize:success', ({ baseUid }) => {
 });
 
 socket.on('player:sync', (data) => {
+    const prevHandUids = new Set(state.localHand.map(c => c.uid));
+
     if (data.hand) {
         state.localHand = sortHandCards(data.hand);
 
@@ -492,12 +492,30 @@ socket.on('player:sync', (data) => {
         });
     }
 
-    // 2: ポップアップ中は配布カードの表示のみ一時的に除外
     renderHand(syncLineupChanges, {
         hideCardUid: isRoundPopupPlaying ? currentDistributeCardUid : null
     });
     renderShop();
     renderDeploySlots(syncLineupChanges);
+
+    // 1: 手札へのドロップ購入アニメーションの実行判定
+    if (state.pendingHandDropAnim && data.hand) {
+        const newlyAddedCard = data.hand.find(c => !prevHandUids.has(c.uid));
+        if (newlyAddedCard) {
+            const targetEl = dom.playerHandContainer.querySelector(`[data-card-uid="${newlyAddedCard.uid}"]`);
+            if (targetEl) {
+                const targetRect = targetEl.getBoundingClientRect();
+                const startRect = {
+                    left: state.pendingHandDropAnim.x - (targetRect.width / 2),
+                    top: state.pendingHandDropAnim.y - (targetRect.height / 2),
+                    width: targetRect.width,
+                    height: targetRect.height
+                };
+                animateCardFlight(startRect, targetEl);
+            }
+        }
+        state.pendingHandDropAnim = null;
+    }
 
     if (state.pendingReadyAfterDiscard && state.localHand.length <= 6) {
         state.pendingReadyAfterDiscard = false;
@@ -600,7 +618,7 @@ dom.btnFinishPrep.onclick = () => {
 dom.btnSkipBattle.onclick = skipBattle;
 
 dom.btnResultNext.onclick = () => {
-    clearAllBattleTimers(); // 4: 未完了タイマーを即時全破棄
+    clearAllBattleTimers();
     dom.resultModal.classList.add('hidden');
 
     if (state.isGameOverDecided) {
@@ -629,7 +647,7 @@ dom.btnRematch.onclick = () => {
     socket.emit('lobby:rematch');
 };
 
-// 3: 退出ボタン（ロビー画面への即時確実遷移）
+// 退出ボタン（ロビー画面への即時確実遷移）
 dom.btnLeave.onclick = () => {
     clearAllBattleTimers();
     state.currentGameState = 'lobby';

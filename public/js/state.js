@@ -1,6 +1,6 @@
 /**
  * public/js/state.js
- * クライアント側状態管理およびDOM要素参照モジュール (不具合修正版)
+ * クライアント側状態管理およびDOM要素参照モジュール (仕様改修版)
  */
 
 export const socket = io();
@@ -21,7 +21,7 @@ export const state = {
     reservedSpectateTargetId: null,
     activeSpectatingId: null,
 
-    // 1: 高性能カスタムポインタドラッグ状態
+    // 高性能カスタムポインタドラッグ状態
     pointerDrag: {
         isDragging: false,
         dragData: null,
@@ -30,7 +30,10 @@ export const state = {
         offsetY: 0
     },
 
-    // 4: バトルタイマーの完全破棄管理
+    // 1: 手札へのドロップ時のアニメーション用座標待機バッファ
+    pendingHandDropAnim: null,
+
+    // バトルタイマーの完全破棄管理
     battleAnimationTimer: null,
     battleTimeoutIds: [], // setTimeout の ID を全追跡して一括クリア可能にする
 
@@ -41,7 +44,7 @@ export const state = {
     cachedOpponentsList: []
 };
 
-// 4: すべてのバトル関連タイマーを安全に全破棄する関数
+// すべてのバトル関連タイマーを安全に全破棄する関数
 export function clearAllBattleTimers() {
     if (state.battleAnimationTimer) {
         clearInterval(state.battleAnimationTimer);

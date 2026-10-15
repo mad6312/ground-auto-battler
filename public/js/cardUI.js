@@ -1,6 +1,6 @@
 /**
  * public/js/cardUI.js
- * カードUIコンポーネント生成および表示制御モジュール (不具合根本修正版)
+ * カードUIコンポーネント生成および表示制御モジュール (仕様改修版)
  */
 
 import { state, dom, socket } from './state.js';
@@ -60,16 +60,17 @@ export function getBuffedStats(card, shouldBuff = false) {
         const bonus = TRIBE_BONUSES[card.tribe];
         const factor = 1 + (count - 1) * bonus.factor;
 
+        // 4: 小数点以下四捨五入に変更
         if (bonus.target.includes('hp')) {
-            hp = Math.floor(hp * factor);
+            hp = Math.round(hp * factor);
             isHpBuffed = true;
         }
         if (bonus.target.includes('atk')) {
-            atk = Math.floor(atk * factor);
+            atk = Math.round(atk * factor);
             isAtkBuffed = true;
         }
         if (bonus.target.includes('spd')) {
-            spd = Math.floor(spd * factor);
+            spd = Math.round(spd * factor);
             isSpdBuffed = true;
         }
     }
@@ -100,6 +101,9 @@ export function clearSynthesizableHighlights() {
     });
 }
 
+/**
+ * カード飛翔移動アニメーション (リフロー強制により確実なtransition再生を保証)
+ */
 export function animateCardFlight(startRect, targetElement, onComplete) {
     if (!startRect || !targetElement) {
         if (onComplete) onComplete();
@@ -114,9 +118,14 @@ export function animateCardFlight(startRect, targetElement, onComplete) {
     ghost.style.top = `${startRect.top}px`;
     ghost.style.width = `${startRect.width}px`;
     ghost.style.height = `${startRect.height}px`;
+    ghost.style.transform = 'translate(0px, 0px)';
+    ghost.style.opacity = '1';
 
     document.body.appendChild(ghost);
     targetElement.style.opacity = '0';
+
+    // 強制リフローを起こし、CSS transitionの初期位置を確実に確定
+    void ghost.offsetHeight;
 
     const deltaX = endRect.left - startRect.left;
     const deltaY = endRect.top - startRect.top;
@@ -133,7 +142,7 @@ export function animateCardFlight(startRect, targetElement, onComplete) {
 }
 
 // ============================
-// 1: 高性能ポインタードラッグシステム
+// 高性能ポインタードラッグシステム
 // ============================
 let customDropHandler = null;
 export function setCustomDropHandler(handler) {
@@ -304,7 +313,6 @@ export function createCardElement(card, options = {}) {
         if (!state.pointerDrag.isDragging) clearSynthesizableHighlights();
     });
 
-    // 1: Pointer Eventsによる高信頼性ドラッグ登録
     if (!options.nonDraggable && options.dragInfo) {
         initPointerDrag(div, card, options.dragInfo);
     }
@@ -379,7 +387,6 @@ export function renderHand(syncLineupCallback, options = {}) {
     const benchCards = sortedHand.filter(c => !state.localDeploySlots.includes(c.uid));
 
     benchCards.forEach(card => {
-        // 2: ポップアップ中は新配布カードのDOM追加を保留
         if (options.hideCardUid && options.hideCardUid === card.uid) return;
 
         const cardEl = createCardElement(card, {

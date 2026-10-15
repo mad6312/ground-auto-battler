@@ -1,13 +1,13 @@
 /**
  * src/server/battleEngine.js
- * 戦闘計算・マッチング・シミュレーションモジュール (要件改修版)
+ * 戦闘計算・マッチング・シミュレーションモジュール (仕様改修版)
  */
 
 const { ELEMENT_RELATIONS, TRIBE_BONUSES, BATTLE_HIT_RATE } = require('../../cardsData');
 const { Player } = require('./gameManager');
 
 /**
- * 4-1: 各プレイヤー単体の所持カードのみを対象とした種族ボーナス補正計算
+ * 各プレイヤー単体の所持カードのみを対象とした種族ボーナス補正計算
  */
 function applyTribeBonus(cardsInBattle, allCardsInPossession) {
     const tribeCounts = {};
@@ -28,17 +28,18 @@ function applyTribeBonus(cardsInBattle, allCardsInPossession) {
             const bonus = TRIBE_BONUSES[c.tribe];
             const factor = 1 + (count - 1) * bonus.factor;
 
+            // 4: 小数点以下四捨五入に変更
             if (bonus.target.includes('hp')) {
-                c.hp = Math.floor(c.hp * factor);
+                c.hp = Math.round(c.hp * factor);
                 c.maxHp = c.hp;
-                c.isHpBuffed = true; // 4-2: 補正フラグ付与
+                c.isHpBuffed = true;
             }
             if (bonus.target.includes('atk')) {
-                c.atk = Math.floor(c.atk * factor);
+                c.atk = Math.round(c.atk * factor);
                 c.isAtkBuffed = true;
             }
             if (bonus.target.includes('spd')) {
-                c.spd = Math.floor(c.spd * factor);
+                c.spd = Math.round(c.spd * factor);
                 c.isSpdBuffed = true;
             }
         }
@@ -53,11 +54,11 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
     const p1Bench = p1.hand.filter(c => !p1.selectedLineup.some(sc => sc && sc.uid === c.uid));
     const p2Bench = p2.hand.filter(c => !p2.selectedLineup.some(sc => sc && sc.uid === c.uid));
 
-    // 4-1: 自分自身のカード群のみで独立して種族補正を適用
+    // 自分自身のカード群のみで独立して種族補正を適用
     const p1CombatTeam = applyTribeBonus(p1.selectedLineup.filter(Boolean), p1.hand);
     const p2CombatTeam = applyTribeBonus(p2.selectedLineup.filter(Boolean), p2.hand);
 
-    // 5-1, 5-2: 前ラウンド終了時点の各プレイヤー自身の補正結果を保存
+    // 前ラウンド終了時点の各プレイヤー自身の補正結果を保存
     p1.lastRoundInfo = {
         lineup: p1CombatTeam.map(c => JSON.parse(JSON.stringify(c))),
         bench: applyTribeBonus(p1Bench, p1.hand).map(c => JSON.parse(JSON.stringify(c)))
@@ -167,7 +168,16 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
                 isCrit = true;
             }
             let dmg = baseDmg * attrMult * (isCrit ? 1.5 : 1.0);
-            finalDmg = Math.max(1, Math.floor(dmg));
+
+            // 5: 四捨五入
+            finalDmg = Math.round(dmg);
+
+            // 3: クリティカル発生時は最低2、通常ヒット時は最低1
+            if (isCrit) {
+                finalDmg = Math.max(2, finalDmg);
+            } else {
+                finalDmg = Math.max(1, finalDmg);
+            }
 
             const key = `${atkCard.uid}__${defCard.uid}`;
             const recordTable = attackerIsP1 ? pairDamagesP1 : pairDamagesP2;

@@ -1,10 +1,11 @@
 /**
  * src/server/socketHandlers.js
- * Socket.io イベントハンドラモジュール (不具合根本修正版)
+ * Socket.io イベントハンドラモジュール (仕様改修版)
  */
 
 const { gameManager, Player } = require('./gameManager');
 const { simulateBattle, createRoundMatchups } = require('./battleEngine');
+const { RARITY_SETTINGS } = require('../../cardsData');
 
 function registerSocketHandlers(io) {
     function broadcastLobbyState() {
@@ -446,9 +447,12 @@ function registerSocketHandlers(io) {
             const card = player.hand.find(c => c.uid === cardUid);
             if (!card) return;
 
+            // 2: 解雇ゴールド計算方式の変更（ショップ購入額 × ★数値 ÷ 2 または 4、小数点以下切り捨て）
+            const cost = RARITY_SETTINGS[card.rarity] ? RARITY_SETTINGS[card.rarity].cost : (card.cost || 2);
+            const stars = card.starCount || 1;
             const gainGold = card.isMarketCard
-                ? Math.floor(card.totalStats / 20)
-                : Math.floor(card.totalStats / 10);
+                ? Math.floor((cost * stars) / 4)
+                : Math.floor((cost * stars) / 2);
 
             player.gold += gainGold;
             player.hand = player.hand.filter(c => c.uid !== cardUid);
@@ -555,7 +559,7 @@ function registerSocketHandlers(io) {
             broadcastGameState();
         });
 
-        // 3: 退出処理 (本人のみ確実にロビー初期状態へ戻す)
+        // 退出処理 (本人のみ確実にロビー初期状態へ戻す)
         socket.on('lobby:leave', () => {
             player.isEntered = false;
             player.isReady = false;
