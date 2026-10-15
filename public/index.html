@@ -15,7 +15,6 @@
         <div class="header-left">
             <h1>グラウンド・オートバトラー</h1>
             <span id="round-indicator" class="hidden">ラウンド: 1</span>
-            <!-- 5-1: 次の対戦相手の表示 -->
             <span id="next-opponent-indicator" class="next-opponent-badge hidden">次の対戦相手: 未定</span>
         </div>
 
@@ -29,6 +28,14 @@
             <button id="btn-open-settings" class="btn header-btn">⚙ 設定</button>
         </div>
     </header>
+
+    <!-- ================= 5: 各ラウンド開始時のポップアップ演出 ================= -->
+    <div id="round-start-popup" class="round-start-overlay hidden">
+        <div class="round-start-card">
+            <div id="round-popup-title" class="round-popup-title">ラウンド 1</div>
+            <div id="round-popup-players" class="round-popup-players">残プレイヤー: 2</div>
+        </div>
+    </div>
 
     <!-- ================= 1. ロビー画面 ================= -->
     <main id="view-lobby" class="view-section">
@@ -121,7 +128,7 @@
 
             <!-- 手札エリア -->
             <div class="hand-wrapper">
-                <div class="hand-header">手札 (同種族・同レアリティを重ねて合成)</div>
+                <div class="hand-header">手札 (右クリックで空き枠へ出撃 / 同種族・同レアリティを重ねて合成)</div>
                 <div id="player-hand" class="hand-container center-aligned"></div>
             </div>
         </section>
@@ -169,39 +176,44 @@
         </div>
     </div>
 
-    <!-- ================= 4. バトルリザルト画面 (6-1: 収まり改善) ================= -->
+    <!-- ================= 4. バトルリザルト画面 (4: ログ常時展開・ボタン削除) ================= -->
     <div id="result-modal" class="modal-overlay hidden">
-        <div class="modal-content medium result-modal-scroll-layout">
+        <div class="modal-content large result-split-modal-layout">
             <div class="result-modal-header">
                 <h2 id="result-title">対戦結果</h2>
                 <p id="result-summary-text"></p>
             </div>
 
-            <div class="result-modal-body">
-                <div class="result-damage-list">
+            <div class="result-split-body">
+                <div class="result-damage-panel">
                     <h3>戦闘ダメージ詳細</h3>
-                    <table id="result-damage-table" class="data-table result-cards-table">
-                        <thead>
-                            <tr>
-                                <th>攻撃カード</th>
-                                <th>対象カード</th>
-                                <th>与えた合計ダメージ</th>
-                            </tr>
-                        </thead>
-                        <tbody></tbody>
-                    </table>
+                    <div class="result-damage-table-wrapper">
+                        <table id="result-damage-table" class="data-table result-cards-table">
+                            <thead>
+                                <tr>
+                                    <th>攻撃カード</th>
+                                    <th>対象カード</th>
+                                    <th>与えた合計ダメージ</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
                 </div>
 
-                <div class="result-log-section">
-                    <button id="btn-toggle-result-log" class="btn secondary small">ログを表示 ▼</button>
-                    <div id="result-log-drawer" class="log-drawer hidden">
+                <!-- 4: ボタンを削除し、常時スクロール展開されるログ領域 -->
+                <div class="result-log-panel">
+                    <div class="result-log-header">
+                        <h3>バトル経過ログ</h3>
+                    </div>
+                    <div id="result-log-drawer" class="result-log-box always-open-log">
                         <div id="result-log-list" class="log-list"></div>
                     </div>
                 </div>
             </div>
 
             <div class="modal-actions result-modal-footer">
-                <button id="btn-result-next" class="btn primary">次へ</button>
+                <button id="btn-result-next" class="btn primary large">次へ</button>
             </div>
         </div>
     </div>
@@ -234,7 +246,7 @@
         </div>
     </div>
 
-    <!-- ================= 6. Tipsモーダル (1-3: サイズ固定) ================= -->
+    <!-- ================= 6. Tipsモーダル ================= -->
     <div id="modal-tips" class="modal-overlay hidden">
         <div class="modal-content large tips-modal-box tips-modal-fixed">
             <div class="tips-header">
@@ -247,30 +259,58 @@
             </div>
 
             <div class="tips-scroll-content">
-                <!-- 属性タブ -->
-                <div id="tip-content-element" class="tips-panel">
-                    <div class="element-relations-container">
-                        <div class="element-relation-card">
+                <!-- 「属性」タブ -->
+                <div id="tip-content-element" class="tips-panel vertical-center-panel">
+                    <div class="element-relations-triangle-container">
+                        <div class="triangle-card">
                             <h4>【属性相性図 1】</h4>
-                            <div class="relation-cycle">
-                                <span class="elem-badge elem-火">火</span> ➔
-                                <span class="elem-badge elem-氷">氷</span> ➔
-                                <span class="elem-badge elem-風">風</span> ➔
-                                <span class="elem-badge elem-火">火</span>
+                            <div class="triangle-svg-wrapper">
+                                <svg viewBox="0 0 200 160" class="triangle-svg">
+                                    <defs>
+                                        <marker id="arrow1" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6"
+                                            markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M 0 1 L 10 5 L 0 9 z" fill="#f59e0b" />
+                                        </marker>
+                                    </defs>
+                                    <path d="M 116 38 L 154 114" stroke="#f59e0b" stroke-width="3" fill="none"
+                                        marker-end="url(#arrow1)" />
+                                    <path d="M 144 136 L 56 136" stroke="#f59e0b" stroke-width="3" fill="none"
+                                        marker-end="url(#arrow1)" />
+                                    <path d="M 46 114 L 84 38" stroke="#f59e0b" stroke-width="3" fill="none"
+                                        marker-end="url(#arrow1)" />
+                                </svg>
+                                <div class="svg-node node-top"><span class="elem-badge elem-火">火</span></div>
+                                <div class="svg-node node-right"><span class="elem-badge elem-氷">氷</span></div>
+                                <div class="svg-node node-left"><span class="elem-badge elem-風">風</span></div>
                             </div>
                             <p class="relation-note">火は氷に強く、氷は風に強く、風は火に強い。</p>
                         </div>
-                        <div class="element-relation-card">
+
+                        <div class="triangle-card">
                             <h4>【属性相性図 2】</h4>
-                            <div class="relation-cycle">
-                                <span class="elem-badge elem-雷">雷</span> ➔
-                                <span class="elem-badge elem-水">水</span> ➔
-                                <span class="elem-badge elem-地">地</span> ➔
-                                <span class="elem-badge elem-雷">雷</span>
+                            <div class="triangle-svg-wrapper">
+                                <svg viewBox="0 0 200 160" class="triangle-svg">
+                                    <defs>
+                                        <marker id="arrow2" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6"
+                                            markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M 0 1 L 10 5 L 0 9 z" fill="#f59e0b" />
+                                        </marker>
+                                    </defs>
+                                    <path d="M 116 38 L 154 114" stroke="#f59e0b" stroke-width="3" fill="none"
+                                        marker-end="url(#arrow2)" />
+                                    <path d="M 144 136 L 56 136" stroke="#f59e0b" stroke-width="3" fill="none"
+                                        marker-end="url(#arrow2)" />
+                                    <path d="M 46 114 L 84 38" stroke="#f59e0b" stroke-width="3" fill="none"
+                                        marker-end="url(#arrow2)" />
+                                </svg>
+                                <div class="svg-node node-top"><span class="elem-badge elem-雷">雷</span></div>
+                                <div class="svg-node node-right"><span class="elem-badge elem-水">水</span></div>
+                                <div class="svg-node node-left"><span class="elem-badge elem-地">地</span></div>
                             </div>
                             <p class="relation-note">雷は水に強く、水は地に強く、地は雷に強い。</p>
                         </div>
                     </div>
+
                     <div class="tips-description-box">
                         <p>属性は、攻撃時の弱点・耐性判定に関与します。</p>
                         <p><strong>弱点属性への攻撃：</strong> 攻撃側が与えるダメージが2倍になります。</p>
@@ -278,8 +318,8 @@
                     </div>
                 </div>
 
-                <!-- 種族タブ -->
-                <div id="tip-content-tribe" class="tips-panel hidden">
+                <!-- 「種族」タブ -->
+                <div id="tip-content-tribe" class="tips-panel vertical-center-panel hidden">
                     <p class="tips-intro-text">
                         手札に同種族カードが2枚以上ある場合、その種族のカードが1枚増えるごとに、対象スタッツの補正倍率が10%または5%ずつ上昇します。
                     </p>
@@ -326,8 +366,8 @@
                     </table>
                 </div>
 
-                <!-- 合成タブ (1-1: 新レイアウト適用) -->
-                <div id="tip-content-synth" class="tips-panel hidden">
+                <!-- 「合成」タブ -->
+                <div id="tip-content-synth" class="tips-panel vertical-center-panel hidden">
                     <p class="tips-intro-text">レアリティと種族が同じカード同士は合成することができます。</p>
 
                     <div class="synth-example-container">
@@ -340,13 +380,15 @@
                                 </div>
                                 <div class="card-row-stats-head">
                                     <span class="badge-star">★1</span>
-                                    <span class="card-cost">2G</span>
                                 </div>
                                 <div class="card-name">焔刃のエルフ (Flameblade Elf)</div>
                                 <div class="card-stats">
-                                    <span class="stat-hp">❤2</span>
-                                    <span class="stat-atk">⚔1</span>
-                                    <span class="stat-spd">⚡7</span>
+                                    <span class="stat-hp" title="HP"><span class="stat-icon">❤</span><span
+                                            class="stat-val">2</span></span>
+                                    <span class="stat-atk" title="攻撃"><span class="stat-icon">⚔</span><span
+                                            class="stat-val">1</span></span>
+                                    <span class="stat-spd" title="素早さ"><span class="stat-icon">⚡</span><span
+                                            class="stat-val">7</span></span>
                                 </div>
                             </div>
                         </div>
@@ -362,13 +404,15 @@
                                 </div>
                                 <div class="card-row-stats-head">
                                     <span class="badge-star">★1</span>
-                                    <span class="card-cost">2G</span>
                                 </div>
                                 <div class="card-name">霜精のエルフ (Frost-Spirited Elf)</div>
                                 <div class="card-stats">
-                                    <span class="stat-hp">❤1</span>
-                                    <span class="stat-atk">⚔3</span>
-                                    <span class="stat-spd">⚡6</span>
+                                    <span class="stat-hp" title="HP"><span class="stat-icon">❤</span><span
+                                            class="stat-val">1</span></span>
+                                    <span class="stat-atk" title="攻撃"><span class="stat-icon">⚔</span><span
+                                            class="stat-val">3</span></span>
+                                    <span class="stat-spd" title="素早さ"><span class="stat-icon">⚡</span><span
+                                            class="stat-val">6</span></span>
                                 </div>
                             </div>
                         </div>
@@ -384,13 +428,15 @@
                                 </div>
                                 <div class="card-row-stats-head">
                                     <span class="badge-star">★2</span>
-                                    <span class="card-cost">2G</span>
                                 </div>
                                 <div class="card-name">焔刃のエルフ (Flameblade Elf)</div>
                                 <div class="card-stats">
-                                    <span class="stat-hp">❤3</span>
-                                    <span class="stat-atk">⚔4</span>
-                                    <span class="stat-spd">⚡13</span>
+                                    <span class="stat-hp" title="HP"><span class="stat-icon">❤</span><span
+                                            class="stat-val">3</span></span>
+                                    <span class="stat-atk" title="攻撃"><span class="stat-icon">⚔</span><span
+                                            class="stat-val">4</span></span>
+                                    <span class="stat-spd" title="素早さ"><span class="stat-icon">⚡</span><span
+                                            class="stat-val">13</span></span>
                                 </div>
                             </div>
                         </div>
@@ -431,7 +477,7 @@
 
     <!-- 前ラウンド情報確認モーダル -->
     <div id="modal-history" class="modal-overlay hidden">
-        <div class="modal-content medium">
+        <div class="modal-content large">
             <h3 id="history-player-name">前ラウンド情報</h3>
             <h4>繰り出したカード順</h4>
             <div id="history-lineup" class="card-grid center-aligned history-card-grid"></div>
@@ -463,7 +509,7 @@
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="client.js"></script>
+    <script type="module" src="js/main.js"></script>
 </body>
 
 </html>
