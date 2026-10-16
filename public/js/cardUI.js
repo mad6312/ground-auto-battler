@@ -64,7 +64,6 @@ export function getBuffedStats(card, shouldBuff = false) {
         const bonus = TRIBE_BONUSES[card.tribe];
         const pct = (count - 1) * bonus.percent;
 
-        // M5: 浮動小数点丸め誤差のない整数演算四捨五入
         if (bonus.target.includes('hp')) {
             hp = applyPercentRoundHalfUp(hp, pct);
             isHpBuffed = true;
@@ -106,7 +105,7 @@ export function clearSynthesizableHighlights() {
 }
 
 /**
- * カード飛翔移動アニメーション (リフロー強制により確実なtransition再生を保証)
+ * カード飛翔移動アニメーション
  */
 export function animateCardFlight(startRect, targetElement, onComplete) {
     if (!startRect || !targetElement) {
@@ -128,7 +127,6 @@ export function animateCardFlight(startRect, targetElement, onComplete) {
     document.body.appendChild(ghost);
     targetElement.style.opacity = '0';
 
-    // 強制リフロー
     void ghost.offsetHeight;
 
     const deltaX = endRect.left - startRect.left;
@@ -146,7 +144,7 @@ export function animateCardFlight(startRect, targetElement, onComplete) {
 }
 
 // ============================
-// 高性能ポインタードラッグシステム (M7: window監視版)
+// 高性能ポインタードラッグシステム
 // ============================
 let customDropHandler = null;
 export function setCustomDropHandler(handler) {
@@ -155,11 +153,44 @@ export function setCustomDropHandler(handler) {
 
 let activeDragSession = null;
 
-// window単位でmove / up / cancelを処理し、途中の再描画によるリスナ切断・ゴースト残留を完全排除
-window.addEventListener('pointermove', (e) => {
+const endCurrentDrag = (e, isSuccess) => {
     if (!activeDragSession) return;
     const s = activeDragSession;
+    activeDragSession = null;
 
+    if (s.sourceElement) {
+        s.sourceElement.style.opacity = '1';
+    }
+    clearSynthesizableHighlights();
+
+    if (state.pointerDrag.ghostElement) {
+        state.pointerDrag.ghostElement.remove();
+    }
+
+    if (s.hasStartedDrag && isSuccess && customDropHandler && state.pointerDrag.dragData) {
+        const dropTarget = document.elementFromPoint(e.clientX, e.clientY);
+        customDropHandler(dropTarget, state.pointerDrag.dragData, e.clientX, e.clientY);
+    }
+
+    state.pointerDrag = { isDragging: false, dragData: null, ghostElement: null, offsetX: 0, offsetY: 0 };
+
+    if (state.pendingMarketSync) {
+        renderMarketCards();
+        updateMarketTabLabel();
+        state.pendingMarketSync = null;
+    }
+};
+
+// N-M4: e.buttons === 0 の検知による、ウィンドウ外ボタン離し時のドラッグ継続防止
+window.addEventListener('pointermove', (e) => {
+    if (!activeDragSession) return;
+
+    if (e.buttons === 0) {
+        endCurrentDrag(e, false);
+        return;
+    }
+
+    const s = activeDragSession;
     const moveDist = Math.hypot(e.clientX - s.startX, e.clientY - s.startY);
     if (!s.hasStartedDrag && moveDist > 5) {
         s.hasStartedDrag = true;
@@ -193,41 +224,19 @@ window.addEventListener('pointermove', (e) => {
     }
 });
 
-const endCurrentDrag = (e, isSuccess) => {
-    if (!activeDragSession) return;
-    const s = activeDragSession;
-    activeDragSession = null;
-
-    if (s.sourceElement) {
-        s.sourceElement.style.opacity = '1';
-    }
-    clearSynthesizableHighlights();
-
-    if (state.pointerDrag.ghostElement) {
-        state.pointerDrag.ghostElement.remove();
-    }
-
-    if (s.hasStartedDrag && isSuccess && customDropHandler && state.pointerDrag.dragData) {
-        const dropTarget = document.elementFromPoint(e.clientX, e.clientY);
-        customDropHandler(dropTarget, state.pointerDrag.dragData, e.clientX, e.clientY);
-    }
-
-    state.pointerDrag = { isDragging: false, dragData: null, ghostElement: null, offsetX: 0, offsetY: 0 };
-
-    // M7: ドラッグ中に届いていた市場更新があれば即時反映
-    if (state.pendingMarketSync) {
-        renderMarketCards();
-        updateMarketTabLabel();
-        state.pendingMarketSync = null;
-    }
-};
-
 window.addEventListener('pointerup', (e) => endCurrentDrag(e, true));
 window.addEventListener('pointercancel', (e) => endCurrentDrag(e, false));
 
+// N-M4: ウィンドウからのフォーカス離脱時も安全にドラッグ破棄
+window.addEventListener('blur', () => {
+    if (activeDragSession) {
+        endCurrentDrag({ clientX: 0, clientY: 0 }, false);
+    }
+});
+
 function initPointerDrag(cardElement, card, dragInfo) {
     cardElement.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0) return; // 左クリックのみ
+        if (e.button !== 0) return;
         if (cardElement.dataset.nonDraggable === 'true') return;
 
         activeDragSession = {
@@ -265,7 +274,7 @@ export function createCardElement(card, options = {}) {
     let kaiBadgeHtml = '';
     if (card.isMarketCard || options.isMarket) {
         const rawSeller = card.sellerName || options.sellerName || '他プレイヤー';
-        const seller = escapeHtml(rawSeller); // M10: XSS対策
+        const seller = escapeHtml(rawSeller);
         kaiBadgeHtml = `
       <span class="badge-market-kai">解
         <div class="kai-balloon">解雇者：${seller}</div>

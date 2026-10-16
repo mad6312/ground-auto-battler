@@ -1,6 +1,6 @@
 /**
  * src/server/socketHandlers.js
- * Socket.io イベントハンドラモジュール (要件改修版)
+ * Socket.io イベントハンドラモジュール (完全修正版)
  */
 
 const { gameManager, Player, normalizeLineup } = require('./gameManager');
@@ -61,6 +61,9 @@ function registerSocketHandlers(io) {
         });
     }
 
+    /**
+     * N-H3, N-M1: 生存者2名以上(強制終了)や同名プレイヤーにも完全対応した正確な順位計算
+     */
     function computeRankings() {
         const allEntered = Object.values(gameManager.players).filter(p => p.isEntered);
         const survivors = allEntered.filter(p => p.isAlive);
@@ -68,32 +71,63 @@ function registerSocketHandlers(io) {
 
         let rankings = [];
 
-        if (survivors.length === 1) {
-            rankings.push({ rank: 1, name: survivors[0].name, life: survivors[0].life });
+        if (survivors.length >= 2) {
+            // N-H3: 強制終了時 - 残りライフ降順（同ライフは同順位）
+            const sortedSurvivors = [...survivors].sort((a, b) => b.life - a.life);
+            let currentRank = 1;
+            for (let i = 0; i < sortedSurvivors.length; i++) {
+                if (i > 0 && sortedSurvivors[i].life !== sortedSurvivors[i - 1].life) {
+                    currentRank = i + 1;
+                }
+                rankings.push({
+                    rank: currentRank,
+                    id: sortedSurvivors[i].id,
+                    name: sortedSurvivors[i].name,
+                    life: sortedSurvivors[i].life
+                });
+            }
+        } else if (survivors.length === 1) {
+            // 単独生存者
+            rankings.push({
+                rank: 1,
+                id: survivors[0].id,
+                name: survivors[0].name,
+                life: survivors[0].life
+            });
         } else if (survivors.length === 0 && deadPlayers.length > 0) {
+            // N-H1: 最終ラウンド同時全滅による同時優勝
             const maxElimRound = Math.max(...deadPlayers.map(p => p.eliminatedRound || 1));
             const jointWinners = deadPlayers.filter(p => (p.eliminatedRound || 1) === maxElimRound);
             jointWinners.forEach(p => {
-                rankings.push({ rank: 1, name: p.name, life: p.life, isJointWinner: true });
+                rankings.push({
+                    rank: 1,
+                    id: p.id,
+                    name: p.name,
+                    life: p.life,
+                    isJointWinner: true
+                });
             });
         }
 
-        const rankedUids = new Set(rankings.map(r => r.name));
-        const remainingDead = deadPlayers.filter(p => !rankedUids.has(p.name));
+        // N-M1: プレイヤーIDで判定し、同名プレイヤーが欠落する不具合を解消
+        const rankedIds = new Set(rankings.map(r => r.id));
+        const remainingDead = deadPlayers.filter(p => !rankedIds.has(p.id));
         remainingDead.sort((a, b) => (b.eliminatedRound || 0) - (a.eliminatedRound || 0));
 
-        let currentRank = rankings.length + 1;
         for (let i = 0; i < remainingDead.length; i++) {
-            if (i > 0 && remainingDead[i].eliminatedRound !== remainingDead[i - 1].eliminatedRound) {
-                currentRank = rankings.length + 1;
+            let rank = rankings.length + 1;
+            if (i > 0 && remainingDead[i].eliminatedRound === remainingDead[i - 1].eliminatedRound) {
+                rank = rankings[rankings.length - 1].rank;
             }
             rankings.push({
-                rank: currentRank,
+                rank,
+                id: remainingDead[i].id,
                 name: remainingDead[i].name,
                 life: remainingDead[i].life
             });
         }
 
+        // 切断プレイヤーを行末に追加
         gameManager.disconnectedPlayers.forEach(dp => {
             rankings.push({ isDisconnected: true, name: dp.name });
         });
@@ -165,7 +199,14 @@ function registerSocketHandlers(io) {
             gameManager.recordMatch(p1.id, m.opponentId, isGhost ? m.originalId : null);
 
             if (isGhost) {
-                const ghostBase = gameManager.players[m.originalId] || p1;
+                // N-L3: ゴースト元が存在しない場合は他の生存プレイヤーから安全に選定
+                let ghostBase = gameManager.players[m.originalId];
+                if (!ghostBase) {
+                    const fallbackCandidates = activePlayers.filter(p => p.id !== p1.id);
+                    ghostBase = fallbackCandidates.length > 0
+                        ? fallbackCandidates[Math.floor(Math.random() * fallbackCandidates.length)]
+                        : p1;
+                }
                 p2 = new Player('ghost_' + ghostBase.id, ghostBase.name + ' (影)');
                 p2.hand = JSON.parse(JSON.stringify(ghostBase.hand));
                 p2.selectedLineup = JSON.parse(JSON.stringify(ghostBase.selectedLineup));
@@ -181,7 +222,6 @@ function registerSocketHandlers(io) {
                 }
             });
 
-            // 8: 全交戦ペア結果 (combatPairs) を含める
             const battlePayload = {
                 summary: {
                     p1Id: p1.id,
@@ -213,6 +253,10 @@ function registerSocketHandlers(io) {
         const survivors = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
         const instantGameOver = survivors.length <= 1;
 
+        // N-H1: バトル決着および参加者状態をマネージャに記録
+        gameManager.gameOverDecided = instantGameOver;
+        gameManager.battleParticipants = new Set(Object.keys(gameManager.allBattlesData));
+
         Object.values(gameManager.players).forEach(p => {
             if (gameManager.allBattlesData[p.id]) {
                 io.to(p.id).emit('battle:start', {
@@ -232,6 +276,7 @@ function registerSocketHandlers(io) {
     function checkEndBattlePhase() {
         const remaining = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
 
+        // N-H1: 生存者が1名以下（0名含む）なら即座にゲーム終了へ
         if (remaining.length <= 1) {
             endGameCompletely();
             return;
@@ -259,12 +304,24 @@ function registerSocketHandlers(io) {
         const player = gameManager.addPlayer(socket.id, `プレイヤー_${socket.id.substring(0, 4)}`);
         broadcastLobbyState();
 
+        // N-H4: リネーム時にマッチング再生成を行わず、該当する opponentName のみを書き換えて通知
         socket.on('player:rename', guard((newName) => {
             if (typeof newName === 'string' && newName.trim().length > 0) {
                 player.name = newName.trim().substring(0, 16);
+
+                // マッチングは維持したまま、表示名のみを更新
+                Object.entries(gameManager.roundMatchups).forEach(([pid, m]) => {
+                    if (m.opponentId === player.id) {
+                        m.opponentName = player.name;
+                        io.to(pid).emit('matchup:notice', { opponentName: m.opponentName });
+                    } else if (m.isGhost && m.originalId === player.id) {
+                        m.opponentName = player.name + ' (影)';
+                        io.to(pid).emit('matchup:notice', { opponentName: m.opponentName });
+                    }
+                });
+
                 broadcastLobbyState();
                 broadcastGameState();
-                notifyRoundMatchups();
             }
         }));
 
@@ -345,7 +402,6 @@ function registerSocketHandlers(io) {
             });
         }));
 
-        // 5: リロール時にも現在のラウンド別出現率を適用
         socket.on('shop:reroll', guard(() => {
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
             if (player.rerollShop(gameManager.round)) {
@@ -518,8 +574,12 @@ function registerSocketHandlers(io) {
             player.selectedLineup = player.selectedLineup.map(c => (c && c.uid === cardUid ? null : c));
             player.sortHand();
 
+            const discardCard = JSON.parse(JSON.stringify(card));
+            // N-L1: 売却カードから配布フラグを除去
+            if (discardCard.isNewDistributed) delete discardCard.isNewDistributed;
+
             gameManager.pendingDiscards.push({
-                card: JSON.parse(JSON.stringify(card)),
+                card: discardCard,
                 sellerId: player.id,
                 sellerName: player.name
             });
@@ -532,13 +592,11 @@ function registerSocketHandlers(io) {
         }));
 
         socket.on('player:updateLineup', guard(({ lineupUids }) => {
-            // 3: 敗北・脱落プレイヤーの操作を遮断
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
             player.selectedLineup = normalizeLineup(player, lineupUids);
         }));
 
         socket.on('player:setReady', guard(({ lineupUids }) => {
-            // 3: 敗北・脱落プレイヤーの準備完了操作を確実に無効化
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
             player.selectedLineup = normalizeLineup(player, lineupUids);
 
@@ -551,12 +609,22 @@ function registerSocketHandlers(io) {
             }
         }));
 
-        // 1: バトルリザルト画面で「次へ」をクリックした際、待機ランプ(isReady)を点灯し同期
+        // N-H1: 同時全滅（生存者0）時でも戦闘参加者全員の「次へ」を正常受付し決着へ導く
         socket.on('battle:next', guard(() => {
-            if (gameManager.gameState !== 'battle' || !player.isAlive || player.hasClickedNext) return;
+            if (gameManager.gameState !== 'battle') return;
+
+            if (gameManager.gameOverDecided) {
+                // 勝敗決着済みの場合は、脱落者も含め当該バトルの参加者ならゲーム終了処理へ進める
+                if (gameManager.battleParticipants.has(player.id)) {
+                    endGameCompletely();
+                }
+                return;
+            }
+
+            if (!player.isAlive || player.hasClickedNext) return;
             player.hasClickedNext = true;
-            player.isReady = true; // 待機ランプを点灯
-            broadcastGameState();  // 他プレイヤーおよび自身の画面にリアルタイム同期
+            player.isReady = true;
+            broadcastGameState();
             checkEndBattlePhase();
         }));
 
@@ -577,7 +645,9 @@ function registerSocketHandlers(io) {
             endGameCompletely();
         }));
 
+        // N-H2: 試合中の遅れた再戦リクエストの混入を遮断 (ロビー時のみ受付)
         socket.on('lobby:rematch', guard(() => {
+            if (gameManager.gameState !== 'lobby') return;
             player.life = 5;
             player.gold = 20;
             player.hand = [];
@@ -593,7 +663,9 @@ function registerSocketHandlers(io) {
             broadcastGameState();
         }));
 
+        // N-H2: 試合中の遅れた退出リクエストの混入を遮断 (ロビー時のみ受付)
         socket.on('lobby:leave', guard(() => {
+            if (gameManager.gameState !== 'lobby') return;
             player.isEntered = false;
             player.isReady = false;
             player.isAlive = true;

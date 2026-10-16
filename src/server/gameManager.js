@@ -1,6 +1,6 @@
 /**
  * src/server/gameManager.js
- * プレイヤーおよび全体ゲーム状態の管理モジュール (要件改修版)
+ * プレイヤーおよび全体ゲーム状態の管理モジュール (完全修正版)
  */
 
 const {
@@ -104,7 +104,6 @@ class Player {
         this.purchasedMarketUids = new Set();
     }
 
-    // 5: 現在のラウンド別出現率を適用してショップを補充
     initRoundShop(round = 1) {
         this.purchasedMarketUids.clear();
         if (this.shop.length === 0) {
@@ -120,7 +119,6 @@ class Player {
         }
     }
 
-    // 5: リロール時も現在のラウンド別出現率を適用
     rerollShop(round = 1) {
         if (this.gold < 2) return false;
         this.gold -= 2;
@@ -149,6 +147,8 @@ class GameManager {
         this.roundMatchups = {};
         this.disconnectedPlayers = [];
         this.matchHistory = {};
+        this.gameOverDecided = false;
+        this.battleParticipants = new Set();
     }
 
     addPlayer(id, name) {
@@ -185,6 +185,8 @@ class GameManager {
         this.disconnectedPlayers = [];
         this.matchHistory = {};
         this.hostSocketId = null;
+        this.gameOverDecided = false;
+        this.battleParticipants.clear();
     }
 
     getPlayer(id) {
@@ -234,6 +236,8 @@ class GameManager {
         this.activeMarketCards = [];
         this.disconnectedPlayers = [];
         this.matchHistory = {};
+        this.gameOverDecided = false;
+        this.battleParticipants.clear();
 
         const entered = Object.values(this.players).filter(p => p.isEntered);
         entered.forEach(p => {
@@ -245,9 +249,15 @@ class GameManager {
             p.hasClickedNext = false;
             p.isAlive = true;
             p.eliminatedRound = null;
+            p.rank = null;
+
+            // N-M3: 前ゲームのショップロック・前ラウンド情報・市場購入履歴を完全初期化
+            p.shop = [];
+            p.lastRoundInfo = null;
+            p.purchasedMarketUids.clear();
+
             this.matchHistory[p.id] = new Set();
 
-            // 5: 第1ラウンドショップ生成
             p.initRoundShop(1);
 
             // 第1ラウンド配布カード (コモンのみ)
@@ -263,8 +273,9 @@ class GameManager {
         this.gameState = 'prep';
         this.activeMarketCards = [...this.pendingDiscards];
         this.pendingDiscards = [];
+        this.gameOverDecided = false;
+        this.battleParticipants.clear();
 
-        // 6: ラウンド開始時ゴールド付与 (R2～4: 10G, R5以降: 15G)
         const goldBonus = this.round >= 5 ? 15 : 10;
 
         const remaining = Object.values(this.players).filter(p => p.isAlive && p.isEntered);
@@ -273,17 +284,14 @@ class GameManager {
             p.isReady = false;
             p.hasClickedNext = false;
 
-            // 繰り出しUIから手札へ全回収
             p.selectedLineup = [null, null, null];
 
             p.hand.forEach(c => {
                 if (c && c.isNewDistributed) delete c.isNewDistributed;
             });
 
-            // 5: 新ラウンド別出現率でショップ生成
             p.initRoundShop(this.round);
 
-            // 新ラウンド配布カード追加
             const distCard = createRandomDistributedCard(this.round);
             distCard.isNewDistributed = true;
             p.hand.push(distCard);
@@ -308,8 +316,13 @@ class GameManager {
 
             p.gold += gainGold;
             p.hand = p.hand.filter(c => c.uid !== target.uid);
+
+            const discardCard = JSON.parse(JSON.stringify(target));
+            // N-L1: 売却スナップショットから不要な配布フラグを確実に除去
+            if (discardCard.isNewDistributed) delete discardCard.isNewDistributed;
+
             this.pendingDiscards.push({
-                card: JSON.parse(JSON.stringify(target)),
+                card: discardCard,
                 sellerId: p.id,
                 sellerName: p.name
             });

@@ -1,5 +1,5 @@
 /* ============================================================
-   グラウンド・オートバトラー スタイルシート (要件改修版)
+   グラウンド・オートバトラー スタイルシート (UI改修版)
    ============================================================ */
 
 :root {
@@ -764,40 +764,13 @@ body {
     box-shadow: 0 0 12px rgba(250, 204, 21, 0.5);
 }
 
-/* 8-3: 先にHPが0になったカードの遺影風視覚表現 */
+/* 1: 先にHPが0になったカードの遺影風視覚表現 (属性バッジを覆い隠す要素を完全撤廃し、属性バッジの視認性を確保) */
 .card-item.card-portrait-memorial {
-    filter: grayscale(100%) contrast(1.15) brightness(0.85) !important;
-    border-color: #000000 !important;
-    box-shadow: inset 0 0 14px rgba(0, 0, 0, 0.95), 0 4px 12px rgba(0, 0, 0, 0.9) !important;
+    filter: grayscale(100%) contrast(1.25) brightness(0.78) !important;
+    border-color: #020617 !important;
+    box-shadow: inset 0 0 16px rgba(0, 0, 0, 0.95), 0 4px 12px rgba(0, 0, 0, 0.9) !important;
     position: relative;
     overflow: hidden;
-}
-
-.card-item.card-portrait-memorial::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 38px;
-    height: 38px;
-    background: linear-gradient(135deg, #000000 50%, transparent 50%);
-    z-index: 15;
-    pointer-events: none;
-    border-bottom: 2px solid #334155;
-}
-
-.card-item.card-portrait-memorial::after {
-    content: "倒伐";
-    position: absolute;
-    top: 4px;
-    left: 2px;
-    font-size: 0.55rem;
-    font-weight: 900;
-    color: #e2e8f0;
-    z-index: 16;
-    pointer-events: none;
-    transform: rotate(-45deg);
-    text-shadow: 0 0 2px #000;
 }
 
 .card-row-meta {

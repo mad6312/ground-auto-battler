@@ -1,6 +1,6 @@
 /**
  * public/js/main.js
- * クライアント側メインエントリーモジュール (要件改修版)
+ * クライアント側メインエントリーモジュール (UI改修版)
  */
 
 import { state, dom, socket, formatLife, showConfirm, clearAllBattleTimers, escapeHtml } from './state.js';
@@ -31,11 +31,8 @@ const WEAKNESS_MAP = {
     '地': '水'
 };
 
-// 各ラウンド開始時のポップアップ制御フラグ
 let isRoundPopupPlaying = false;
 let currentDistributeCardUid = null;
-
-// 1, 2: バトル中「次へ」押下状態のクライアント側追跡フラグ
 let hasClickedNextInBattle = false;
 
 function syncLineupChanges() {
@@ -48,7 +45,6 @@ function syncLineupChanges() {
 }
 
 function proceedSetReady() {
-    // 3: 敗北・脱落プレイヤーは準備完了へ移行不可
     if (!state.myPlayer || !state.myPlayer.isAlive) return;
 
     const lineupUids = [
@@ -64,6 +60,8 @@ function proceedSetReady() {
 }
 
 let isDiscardingFromModal = false;
+let discardModalSafetyTimer = null;
+
 function showOverhandDiscardModal() {
     clearSynthesizableHighlights();
     dom.overhandCardList.innerHTML = '';
@@ -76,15 +74,19 @@ function showOverhandDiscardModal() {
             if (isDiscardingFromModal) return;
             isDiscardingFromModal = true;
             cardEl.style.opacity = '0.5';
+
+            clearTimeout(discardModalSafetyTimer);
+            discardModalSafetyTimer = setTimeout(() => {
+                isDiscardingFromModal = false;
+                cardEl.style.opacity = '1';
+            }, 1200);
+
             socket.emit('card:discard', { cardUid: card.uid });
         };
         dom.overhandCardList.appendChild(cardEl);
     });
 }
 
-/**
- * 2: 相手バーのレンダリング (観戦ボタンの確実な表示・維持)
- */
 function renderOpponentsBar() {
     dom.opponentsBar.innerHTML = '';
     const enteredPlayers = state.cachedOpponentsList.filter(p => p.isEntered);
@@ -96,14 +98,12 @@ function renderOpponentsBar() {
             dom.playerLifeDisplay.textContent = formatLife(p.life);
             dom.playerGoldDisplay.textContent = `${p.gold}G`;
 
-            // 1: 自分の待機ランプ表示
             if (p.isReady || hasClickedNextInBattle) {
                 dom.playerReadyLamp.classList.add('ready');
             } else {
                 dom.playerReadyLamp.classList.remove('ready');
             }
 
-            // 3: 敗北脱落者は完了ボタンを恒久的に無効化
             if (!p.isAlive) {
                 dom.btnFinishPrep.disabled = true;
             }
@@ -125,7 +125,6 @@ function renderOpponentsBar() {
                 actionBtnHtml = `<button class="btn btn-spectate primary">観戦</button>`;
             }
         } else if (isMeFinishedBattle && state.currentGameState === 'battle' && p.isAlive) {
-            // 2: 「次へ」押下後、観戦可能な他プレイヤーに即座に表示され不意に消失しない
             actionBtnHtml = `<button class="btn btn-spectate primary">観戦</button>`;
         }
 
@@ -443,9 +442,8 @@ socket.on('game:sync', (data) => {
         state.activeSpectatingId = null;
         dom.waitAnnouncementBanner.classList.add('hidden');
         dom.playerReadyLamp.classList.remove('ready');
-        hasClickedNextInBattle = false; // 2: 新ラウンド移行でフラグリセット
+        hasClickedNextInBattle = false;
 
-        // 3: 生存者のみ完了ボタン活性化、脱落者は非活性
         if (me && me.isAlive) {
             dom.btnFinishPrep.disabled = false;
         } else {
@@ -456,15 +454,9 @@ socket.on('game:sync', (data) => {
         triggerRoundStartPopupAndDistribute(state.currentRound, aliveCount);
     }
 
-    if (previousState !== 'battle' && state.currentGameState === 'battle') {
-        if (me && !me.isAlive && state.reservedSpectateTargetId) {
-            socket.emit('spectate:getBattle', { targetPlayerId: state.reservedSpectateTargetId });
-        }
-    }
-
     if (state.currentGameState === 'prep') {
         if (me && !me.isAlive) {
-            dom.btnFinishPrep.disabled = true; // 3: 脱落者は操作不可
+            dom.btnFinishPrep.disabled = true;
         } else if (me && me.isReady) {
             dom.waitAnnouncementBanner.textContent = '全員の準備完了を待っています...';
             dom.waitAnnouncementBanner.classList.remove('hidden');
@@ -546,7 +538,9 @@ socket.on('player:sync', (data) => {
         state.pendingHandDropAnim = null;
     }
 
+    clearTimeout(discardModalSafetyTimer);
     isDiscardingFromModal = false;
+
     if (state.localHand.length <= 6) {
         dom.modalOverhand.classList.add('hidden');
         if (state.pendingReadyAfterDiscard) {
@@ -634,7 +628,6 @@ dom.btnReroll.onclick = () => {
 };
 
 dom.btnFinishPrep.onclick = () => {
-    // 3: 敗北・脱落プレイヤーは完了ボタンを操作不可
     if (!state.myPlayer || !state.myPlayer.isAlive) return;
 
     if (state.localHand.length >= 7) {
@@ -656,7 +649,6 @@ dom.btnFinishPrep.onclick = () => {
 
 dom.btnSkipBattle.onclick = skipBattle;
 
-// 1, 2: バトルリザルト画面の「次へ」ボタン押下処理
 dom.btnResultNext.onclick = () => {
     clearAllBattleTimers();
     dom.resultModal.classList.add('hidden');
@@ -668,7 +660,6 @@ dom.btnResultNext.onclick = () => {
 
     dom.nextOpponentIndicator.classList.add('hidden');
 
-    // 1: 待機状態フラグを点灯
     hasClickedNextInBattle = true;
     if (state.myPlayer) {
         state.myPlayer.isReady = true;
@@ -677,7 +668,6 @@ dom.btnResultNext.onclick = () => {
     dom.waitAnnouncementBanner.textContent = '全員のバトル終了を待っています...';
     dom.waitAnnouncementBanner.classList.remove('hidden');
 
-    // 2: 他プレイヤー枠に「観戦」ボタンを即座に表示
     renderOpponentsBar();
 
     socket.emit('battle:next');
@@ -713,10 +703,13 @@ dom.btnSaveName.onclick = () => {
         dom.modalSettings.classList.add('hidden');
     }
 };
+
+// 2: 「ゲームを強制終了」クリック時に設定モーダルを即座に閉じ、その後に確認ダイアログを表示
 dom.btnForceEnd.onclick = () => {
+    dom.modalSettings.classList.add('hidden');
     showConfirm('本当にゲームを強制終了しますか？', () => {
         socket.emit('game:forceEnd');
-        dom.modalSettings.classList.add('hidden');
     });
 };
+
 dom.btnHistoryClose.onclick = () => dom.modalHistory.classList.add('hidden');

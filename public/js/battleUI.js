@@ -1,6 +1,6 @@
 /**
  * public/js/battleUI.js
- * バトル演出・アニメーション・リザルト描画モジュール (要件改修版)
+ * バトル演出・アニメーション・リザルト描画モジュール (完全修正版)
  */
 
 import { state, dom, socket, formatLife, renderCardDots, clearAllBattleTimers, escapeHtml } from './state.js';
@@ -30,10 +30,6 @@ export function spawnDamagePopup(container, text, type) {
     safeTimeout(() => popup.remove(), 1000);
 }
 
-/**
- * 7: カードUI上の残HP数値をリアルタイム更新するヘルパー
- * 種族補正による緑色 (.stat-buffed) を確実に維持
- */
 function updateCardSlotHp(cardSlotElement, newHp) {
     if (!cardSlotElement) return;
     const hpValEl = cardSlotElement.querySelector('.stat-hp .stat-val');
@@ -126,7 +122,6 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
             const targetSide = isLeft ? dom.p1Combatant : dom.p2Combatant;
             const targetSlot = isLeft ? dom.bP1CardSlot : dom.bP2CardSlot;
 
-            // 7: HP0をUIに反映
             updateCardSlotHp(targetSlot, 0);
 
             if (isLeft) leftSlotHasCard = false;
@@ -184,7 +179,6 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
                     spawnDamagePopup(defSide, `-${log.damage}`, popType);
                     safeTimeout(() => defSide.classList.remove('anim-hurt'), 400);
 
-                    // 7: ダメージ直後に被弾カードUIの残HP数値をリアルタイム更新
                     const defRemainingHp = atkIsP1
                         ? (needSwap ? log.state?.p1Card?.hp : log.state?.p2Card?.hp)
                         : (needSwap ? log.state?.p2Card?.hp : log.state?.p1Card?.hp);
@@ -196,7 +190,6 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
             }, 200);
         }
 
-        // 初期カード配置
         if (log.state && !log.faintedSide && !log.deployedSide) {
             const leftCard = needSwap ? log.state.p2Card : log.state.p1Card;
             const rightCard = needSwap ? log.state.p1Card : log.state.p2Card;
@@ -262,11 +255,6 @@ export function skipBattle() {
     }
 }
 
-/**
- * 8: バトルリザルト画面の描画
- * 3列構成: [自分] [相手] [与えた合計ダメージ]
- * 8-3: 先にHPが0になったカードに遺影表現 (.card-portrait-memorial) を適用
- */
 export function showBattleResult(summary) {
     if (!dom.gameOverModal.classList.contains('hidden')) return;
 
@@ -307,7 +295,6 @@ export function showBattleResult(summary) {
         }
     }
 
-    // 8-1, 8-2: 戦闘ダメージ詳細 (すべての交戦カード組み合わせごとに表示)
     dom.resultDamageTableBody.innerHTML = '';
     const combatPairs = summary.combatPairs || [];
 
@@ -325,14 +312,12 @@ export function showBattleResult(summary) {
             let oppFainted = false;
 
             if (isP2) {
-                // 自分はP2
                 myCard = pair.p2Card;
                 oppCard = pair.p1Card;
                 damageGiven = pair.damageP2toP1;
                 myFainted = (pair.faintedSide === 'p2');
                 oppFainted = (pair.faintedSide === 'p1');
             } else {
-                // 自分はP1 (または観戦時はP1を左列とする)
                 myCard = pair.p1Card;
                 oppCard = pair.p2Card;
                 damageGiven = pair.damageP1toP2;
@@ -340,22 +325,20 @@ export function showBattleResult(summary) {
                 oppFainted = (pair.faintedSide === 'p2');
             }
 
-            // 自分側カード
             if (myCard) {
                 const elMy = createCardElement(myCard, { nonDraggable: true, isMyResultCard: false });
                 if (myFainted) {
-                    elMy.classList.add('card-portrait-memorial'); // 8-3: 先に倒れたカードを遺影表示
+                    elMy.classList.add('card-portrait-memorial');
                 }
                 tdMy.appendChild(elMy);
             } else {
                 tdMy.textContent = '-';
             }
 
-            // 相手側カード
             if (oppCard) {
                 const elOpp = createCardElement(oppCard, { nonDraggable: true, isMyResultCard: false });
                 if (oppFainted) {
-                    elOpp.classList.add('card-portrait-memorial'); // 8-3: 先に倒れたカードを遺影表示
+                    elOpp.classList.add('card-portrait-memorial');
                 }
                 tdOpp.appendChild(elOpp);
             } else {
@@ -398,10 +381,11 @@ export function showGameOver(rankings) {
     dom.waitAnnouncementBanner.classList.add('hidden');
     dom.gameOverModal.classList.remove('hidden');
 
-    const winner = rankings.find(r => r.rank === 1);
-    if (winner) {
+    // N-M7: 同時優勝時に全員の名前をVICTORYボックスに連名表示
+    const winners = rankings.filter(r => r.rank === 1);
+    if (winners.length > 0) {
         dom.winnerCelebration.classList.remove('hidden');
-        dom.winnerNameDisplay.textContent = winner.name;
+        dom.winnerNameDisplay.textContent = winners.map(w => w.name).join(' & ');
     } else {
         dom.winnerCelebration.classList.add('hidden');
     }
