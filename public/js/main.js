@@ -1,9 +1,9 @@
 /**
  * public/js/main.js
- * クライアント側メインエントリーモジュール (仕様改修版)
+ * クライアント側メインエントリーモジュール (要件改修版)
  */
 
-import { state, dom, socket, formatLife, showConfirm, clearAllBattleTimers } from './state.js';
+import { state, dom, socket, formatLife, showConfirm, clearAllBattleTimers, escapeHtml } from './state.js';
 import {
     createCardElement,
     renderShop,
@@ -35,13 +35,27 @@ const WEAKNESS_MAP = {
 let isRoundPopupPlaying = false;
 let currentDistributeCardUid = null;
 
+// 1, 2: バトル中「次へ」押下状態のクライアント側追跡フラグ
+let hasClickedNextInBattle = false;
+
 function syncLineupChanges() {
-    const lineupUids = state.localDeploySlots.filter(Boolean);
+    const lineupUids = [
+        state.localDeploySlots[0] || null,
+        state.localDeploySlots[1] || null,
+        state.localDeploySlots[2] || null
+    ];
     socket.emit('player:updateLineup', { lineupUids });
 }
 
 function proceedSetReady() {
-    const lineupUids = state.localDeploySlots.filter(Boolean);
+    // 3: 敗北・脱落プレイヤーは準備完了へ移行不可
+    if (!state.myPlayer || !state.myPlayer.isAlive) return;
+
+    const lineupUids = [
+        state.localDeploySlots[0] || null,
+        state.localDeploySlots[1] || null,
+        state.localDeploySlots[2] || null
+    ];
     socket.emit('player:setReady', { lineupUids });
     dom.playerReadyLamp.classList.add('ready');
     dom.btnFinishPrep.disabled = true;
@@ -49,6 +63,7 @@ function proceedSetReady() {
     dom.waitAnnouncementBanner.classList.remove('hidden');
 }
 
+let isDiscardingFromModal = false;
 function showOverhandDiscardModal() {
     clearSynthesizableHighlights();
     dom.overhandCardList.innerHTML = '';
@@ -58,37 +73,39 @@ function showOverhandDiscardModal() {
         const cardEl = createCardElement(card, { nonDraggable: true });
         cardEl.style.cursor = 'pointer';
         cardEl.onclick = () => {
+            if (isDiscardingFromModal) return;
+            isDiscardingFromModal = true;
+            cardEl.style.opacity = '0.5';
             socket.emit('card:discard', { cardUid: card.uid });
-            setTimeout(() => {
-                if (state.localHand.length <= 6) {
-                    dom.modalOverhand.classList.add('hidden');
-                    if (state.pendingReadyAfterDiscard) {
-                        state.pendingReadyAfterDiscard = false;
-                        proceedSetReady();
-                    }
-                } else {
-                    showOverhandDiscardModal();
-                }
-            }, 200);
         };
         dom.overhandCardList.appendChild(cardEl);
     });
 }
 
-// 相手バーのレンダリング
+/**
+ * 2: 相手バーのレンダリング (観戦ボタンの確実な表示・維持)
+ */
 function renderOpponentsBar() {
     dom.opponentsBar.innerHTML = '';
-    state.cachedOpponentsList.forEach(p => {
+    const enteredPlayers = state.cachedOpponentsList.filter(p => p.isEntered);
+
+    enteredPlayers.forEach(p => {
         if (p.id === state.myId) {
             state.myPlayer = p;
             dom.playerNameDisplay.textContent = p.name;
             dom.playerLifeDisplay.textContent = formatLife(p.life);
             dom.playerGoldDisplay.textContent = `${p.gold}G`;
 
-            if (p.isReady) {
+            // 1: 自分の待機ランプ表示
+            if (p.isReady || hasClickedNextInBattle) {
                 dom.playerReadyLamp.classList.add('ready');
             } else {
                 dom.playerReadyLamp.classList.remove('ready');
+            }
+
+            // 3: 敗北脱落者は完了ボタンを恒久的に無効化
+            if (!p.isAlive) {
+                dom.btnFinishPrep.disabled = true;
             }
             return;
         }
@@ -98,7 +115,7 @@ function renderOpponentsBar() {
 
         let actionBtnHtml = '';
         const isMeDead = state.myPlayer && !state.myPlayer.isAlive;
-        const isMeReady = state.myPlayer && state.myPlayer.isReady;
+        const isMeFinishedBattle = hasClickedNextInBattle || (state.myPlayer && (state.myPlayer.isReady || state.myPlayer.hasClickedNext));
 
         if (isMeDead) {
             if (state.currentGameState === 'prep') {
@@ -107,13 +124,14 @@ function renderOpponentsBar() {
             } else if (p.isAlive) {
                 actionBtnHtml = `<button class="btn btn-spectate primary">観戦</button>`;
             }
-        } else if (isMeReady && state.currentGameState === 'battle' && p.isAlive) {
+        } else if (isMeFinishedBattle && state.currentGameState === 'battle' && p.isAlive) {
+            // 2: 「次へ」押下後、観戦可能な他プレイヤーに即座に表示され不意に消失しない
             actionBtnHtml = `<button class="btn btn-spectate primary">観戦</button>`;
         }
 
         card.innerHTML = `
       <div class="opp-header">
-        <span>${p.name}</span>
+        <span>${escapeHtml(p.name)}</span>
         <span class="ready-lamp ${p.isReady ? 'ready' : ''}"></span>
       </div>
       <div class="opp-life-row">
@@ -182,7 +200,6 @@ function renderOpponentsBar() {
     });
 }
 
-// 各ラウンド開始時のポップアップ演出と配布アニメーション順序制御
 function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
     const popup = document.getElementById('round-start-popup');
     const title = document.getElementById('round-popup-title');
@@ -245,19 +262,16 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
     const deploySlot = dropTarget.closest('.deploy-slot');
     if (deploySlot) {
         const slotIndex = parseInt(deploySlot.dataset.slot, 10);
-        const prevUid = state.localDeploySlots[slotIndex];
 
         if (dragData.type === 'shop') {
             socket.emit('shop:buyAndDeploy', {
                 shopIndex: dragData.shopIndex,
-                slotIndex,
-                previousCardUid: prevUid
+                slotIndex
             });
         } else if (dragData.type === 'market') {
             socket.emit('market:buyAndDeploy', {
                 marketCardUid: dragData.marketCardUid,
-                slotIndex,
-                previousCardUid: prevUid
+                slotIndex
             });
         } else if (dragData.type === 'hand') {
             state.localDeploySlots[slotIndex] = dragData.card.uid;
@@ -301,7 +315,6 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
     const handArea = dropTarget.closest('#player-hand') || dropTarget.closest('.hand-wrapper');
     if (handArea) {
         if (dragData.type === 'shop') {
-            // ドロップ座標を記録してアニメーション予約
             state.pendingHandDropAnim = { x: dropPoint.x, y: dropPoint.y };
             socket.emit('shop:buy', { shopIndex: dragData.shopIndex });
         } else if (dragData.type === 'market') {
@@ -313,7 +326,6 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
             renderDeploySlots(syncLineupChanges);
             syncLineupChanges();
 
-            // 1: 出撃スロットから手札へのドロップ時：マウス位置から手札整列位置への滑らか吸い込み
             const targetEl = dom.playerHandContainer.querySelector(`[data-card-uid="${dragData.card.uid}"]`);
             if (targetEl) {
                 const targetRect = targetEl.getBoundingClientRect();
@@ -347,6 +359,7 @@ socket.on('lobby:update', (data) => {
         dom.roundIndicator.classList.add('hidden');
         dom.nextOpponentIndicator.classList.add('hidden');
         dom.waitAnnouncementBanner.classList.add('hidden');
+        hasClickedNextInBattle = false;
     }
 
     if (me && me.isEntered) {
@@ -381,8 +394,12 @@ socket.on('lobby:update', (data) => {
 
 socket.on('market:sync', (data) => {
     state.localMarket = data.activeMarketCards || [];
-    renderMarketCards();
-    updateMarketTabLabel();
+    if (state.pointerDrag && state.pointerDrag.isDragging) {
+        state.pendingMarketSync = data;
+    } else {
+        renderMarketCards();
+        updateMarketTabLabel();
+    }
 });
 
 socket.on('matchup:notice', ({ opponentName }) => {
@@ -399,15 +416,24 @@ socket.on('game:sync', (data) => {
     state.isHost = data.hostSocketId === state.myId;
     state.cachedOpponentsList = data.players || [];
 
-    if (state.currentGameState !== 'lobby') {
-        dom.roundIndicator.textContent = `ラウンド: ${state.currentRound}`;
-        dom.roundIndicator.classList.remove('hidden');
-        if (state.currentGameState === 'prep') {
-            dom.nextOpponentIndicator.classList.remove('hidden');
-        }
-    } else {
+    const me = (data.players || []).find(p => p.id === state.myId);
+
+    if (state.currentGameState === 'lobby' || !me || !me.isEntered) {
+        dom.viewLobby.classList.remove('hidden');
+        dom.viewGame.classList.add('hidden');
+        dom.waitAnnouncementBanner.classList.add('hidden');
         dom.roundIndicator.classList.add('hidden');
         dom.nextOpponentIndicator.classList.add('hidden');
+        return;
+    }
+
+    dom.viewLobby.classList.add('hidden');
+    dom.viewGame.classList.remove('hidden');
+
+    dom.roundIndicator.textContent = `ラウンド: ${state.currentRound}`;
+    dom.roundIndicator.classList.remove('hidden');
+    if (state.currentGameState === 'prep') {
+        dom.nextOpponentIndicator.classList.remove('hidden');
     }
 
     dom.btnReroll.disabled = (state.currentGameState !== 'prep');
@@ -416,16 +442,30 @@ socket.on('game:sync', (data) => {
         dom.tabShop.click();
         state.activeSpectatingId = null;
         dom.waitAnnouncementBanner.classList.add('hidden');
-        dom.btnFinishPrep.disabled = false;
         dom.playerReadyLamp.classList.remove('ready');
+        hasClickedNextInBattle = false; // 2: 新ラウンド移行でフラグリセット
 
-        const aliveCount = state.cachedOpponentsList.filter(p => p.isAlive).length;
+        // 3: 生存者のみ完了ボタン活性化、脱落者は非活性
+        if (me && me.isAlive) {
+            dom.btnFinishPrep.disabled = false;
+        } else {
+            dom.btnFinishPrep.disabled = true;
+        }
+
+        const aliveCount = state.cachedOpponentsList.filter(p => p.isAlive && p.isEntered).length;
         triggerRoundStartPopupAndDistribute(state.currentRound, aliveCount);
     }
 
-    const me = data.players.find(p => p.id === state.myId);
+    if (previousState !== 'battle' && state.currentGameState === 'battle') {
+        if (me && !me.isAlive && state.reservedSpectateTargetId) {
+            socket.emit('spectate:getBattle', { targetPlayerId: state.reservedSpectateTargetId });
+        }
+    }
+
     if (state.currentGameState === 'prep') {
-        if (me && me.isReady) {
+        if (me && !me.isAlive) {
+            dom.btnFinishPrep.disabled = true; // 3: 脱落者は操作不可
+        } else if (me && me.isReady) {
             dom.waitAnnouncementBanner.textContent = '全員の準備完了を待っています...';
             dom.waitAnnouncementBanner.classList.remove('hidden');
             dom.btnFinishPrep.disabled = true;
@@ -435,19 +475,10 @@ socket.on('game:sync', (data) => {
         }
     }
 
-    if (state.isHost && state.currentGameState !== 'lobby') {
+    if (state.isHost) {
         dom.hostAdminActions.classList.remove('hidden');
     } else {
         dom.hostAdminActions.classList.add('hidden');
-    }
-
-    if (state.currentGameState === 'lobby') {
-        dom.viewLobby.classList.remove('hidden');
-        dom.viewGame.classList.add('hidden');
-        dom.waitAnnouncementBanner.classList.add('hidden');
-    } else {
-        dom.viewLobby.classList.add('hidden');
-        dom.viewGame.classList.remove('hidden');
     }
 
     renderOpponentsBar();
@@ -468,7 +499,6 @@ socket.on('player:sync', (data) => {
     if (data.hand) {
         state.localHand = sortHandCards(data.hand);
 
-        // 新配布カードを検知
         const distCard = data.hand.find(c => c.isNewDistributed);
         if (distCard) {
             currentDistributeCardUid = distCard.uid;
@@ -484,12 +514,12 @@ socket.on('player:sync', (data) => {
         dom.waitAnnouncementBanner.classList.add('hidden');
     }
 
-    if (data.selectedLineup && data.selectedLineup.length === 0) {
-        state.localDeploySlots = [null, null, null];
-    } else if (data.selectedLineup) {
-        data.selectedLineup.forEach((c, idx) => {
-            if (idx < 3) state.localDeploySlots[idx] = c ? c.uid : null;
-        });
+    if (data.selectedLineup) {
+        state.localDeploySlots = [
+            data.selectedLineup[0] ? data.selectedLineup[0].uid : null,
+            data.selectedLineup[1] ? data.selectedLineup[1].uid : null,
+            data.selectedLineup[2] ? data.selectedLineup[2].uid : null
+        ];
     }
 
     renderHand(syncLineupChanges, {
@@ -498,7 +528,6 @@ socket.on('player:sync', (data) => {
     renderShop();
     renderDeploySlots(syncLineupChanges);
 
-    // 1: 手札へのドロップ購入アニメーションの実行判定
     if (state.pendingHandDropAnim && data.hand) {
         const newlyAddedCard = data.hand.find(c => !prevHandUids.has(c.uid));
         if (newlyAddedCard) {
@@ -517,9 +546,15 @@ socket.on('player:sync', (data) => {
         state.pendingHandDropAnim = null;
     }
 
-    if (state.pendingReadyAfterDiscard && state.localHand.length <= 6) {
-        state.pendingReadyAfterDiscard = false;
-        proceedSetReady();
+    isDiscardingFromModal = false;
+    if (state.localHand.length <= 6) {
+        dom.modalOverhand.classList.add('hidden');
+        if (state.pendingReadyAfterDiscard) {
+            state.pendingReadyAfterDiscard = false;
+            proceedSetReady();
+        }
+    } else if (!dom.modalOverhand.classList.contains('hidden')) {
+        showOverhandDiscardModal();
     }
 });
 
@@ -528,12 +563,13 @@ socket.on('battle:start', ({ summary, logs, isGameOverDecided: gameOverFlag }) =
     dom.marketCardsContainer.innerHTML = '';
     dom.btnReroll.disabled = true;
 
-    if (state.reservedSpectateTargetId && !state.myPlayer?.isAlive) {
-        state.activeSpectatingId = state.reservedSpectateTargetId;
+    startBattleAnimation(summary, logs, gameOverFlag);
+});
+
+socket.on('battle:start_notice', () => {
+    if (state.reservedSpectateTargetId) {
         socket.emit('spectate:getBattle', { targetPlayerId: state.reservedSpectateTargetId });
     }
-
-    startBattleAnimation(summary, logs, gameOverFlag);
 });
 
 socket.on('game:ended', ({ rankings }) => {
@@ -598,6 +634,9 @@ dom.btnReroll.onclick = () => {
 };
 
 dom.btnFinishPrep.onclick = () => {
+    // 3: 敗北・脱落プレイヤーは完了ボタンを操作不可
+    if (!state.myPlayer || !state.myPlayer.isAlive) return;
+
     if (state.localHand.length >= 7) {
         state.pendingReadyAfterDiscard = true;
         showOverhandDiscardModal();
@@ -617,6 +656,7 @@ dom.btnFinishPrep.onclick = () => {
 
 dom.btnSkipBattle.onclick = skipBattle;
 
+// 1, 2: バトルリザルト画面の「次へ」ボタン押下処理
 dom.btnResultNext.onclick = () => {
     clearAllBattleTimers();
     dom.resultModal.classList.add('hidden');
@@ -628,12 +668,16 @@ dom.btnResultNext.onclick = () => {
 
     dom.nextOpponentIndicator.classList.add('hidden');
 
+    // 1: 待機状態フラグを点灯
+    hasClickedNextInBattle = true;
     if (state.myPlayer) {
         state.myPlayer.isReady = true;
     }
     dom.playerReadyLamp.classList.add('ready');
     dom.waitAnnouncementBanner.textContent = '全員のバトル終了を待っています...';
     dom.waitAnnouncementBanner.classList.remove('hidden');
+
+    // 2: 他プレイヤー枠に「観戦」ボタンを即座に表示
     renderOpponentsBar();
 
     socket.emit('battle:next');
@@ -644,10 +688,10 @@ dom.btnRematch.onclick = () => {
     dom.gameOverModal.classList.add('hidden');
     dom.viewGame.classList.add('hidden');
     dom.viewLobby.classList.remove('hidden');
+    hasClickedNextInBattle = false;
     socket.emit('lobby:rematch');
 };
 
-// 退出ボタン（ロビー画面への即時確実遷移）
 dom.btnLeave.onclick = () => {
     clearAllBattleTimers();
     state.currentGameState = 'lobby';
@@ -656,6 +700,7 @@ dom.btnLeave.onclick = () => {
     dom.battleScreen.classList.add('hidden');
     dom.viewGame.classList.add('hidden');
     dom.viewLobby.classList.remove('hidden');
+    hasClickedNextInBattle = false;
     socket.emit('lobby:leave');
 };
 

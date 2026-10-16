@@ -1,11 +1,20 @@
 /**
  * src/server/socketHandlers.js
- * Socket.io イベントハンドラモジュール (仕様改修版)
+ * Socket.io イベントハンドラモジュール (要件改修版)
  */
 
-const { gameManager, Player } = require('./gameManager');
+const { gameManager, Player, normalizeLineup } = require('./gameManager');
 const { simulateBattle, createRoundMatchups } = require('./battleEngine');
 const { RARITY_SETTINGS } = require('../../cardsData');
+
+// 不正ペイロード・例外によるサーバークラッシュを防ぐ共通ガードラッパー
+const guard = (fn) => (payload) => {
+    try {
+        fn(payload ?? {});
+    } catch (e) {
+        console.error('Socket handler error:', e);
+    }
+};
 
 function registerSocketHandlers(io) {
     function broadcastLobbyState() {
@@ -43,10 +52,53 @@ function registerSocketHandlers(io) {
         gameManager.roundMatchups = createRoundMatchups(activePlayers, gameManager.matchHistory);
 
         Object.keys(gameManager.roundMatchups).forEach(pid => {
-            io.to(pid).emit('matchup:notice', {
-                opponentName: gameManager.roundMatchups[pid].opponentName
-            });
+            const m = gameManager.roundMatchups[pid];
+            if (m) {
+                io.to(pid).emit('matchup:notice', {
+                    opponentName: m.opponentName
+                });
+            }
         });
+    }
+
+    function computeRankings() {
+        const allEntered = Object.values(gameManager.players).filter(p => p.isEntered);
+        const survivors = allEntered.filter(p => p.isAlive);
+        const deadPlayers = allEntered.filter(p => !p.isAlive);
+
+        let rankings = [];
+
+        if (survivors.length === 1) {
+            rankings.push({ rank: 1, name: survivors[0].name, life: survivors[0].life });
+        } else if (survivors.length === 0 && deadPlayers.length > 0) {
+            const maxElimRound = Math.max(...deadPlayers.map(p => p.eliminatedRound || 1));
+            const jointWinners = deadPlayers.filter(p => (p.eliminatedRound || 1) === maxElimRound);
+            jointWinners.forEach(p => {
+                rankings.push({ rank: 1, name: p.name, life: p.life, isJointWinner: true });
+            });
+        }
+
+        const rankedUids = new Set(rankings.map(r => r.name));
+        const remainingDead = deadPlayers.filter(p => !rankedUids.has(p.name));
+        remainingDead.sort((a, b) => (b.eliminatedRound || 0) - (a.eliminatedRound || 0));
+
+        let currentRank = rankings.length + 1;
+        for (let i = 0; i < remainingDead.length; i++) {
+            if (i > 0 && remainingDead[i].eliminatedRound !== remainingDead[i - 1].eliminatedRound) {
+                currentRank = rankings.length + 1;
+            }
+            rankings.push({
+                rank: currentRank,
+                name: remainingDead[i].name,
+                life: remainingDead[i].life
+            });
+        }
+
+        gameManager.disconnectedPlayers.forEach(dp => {
+            rankings.push({ isDisconnected: true, name: dp.name });
+        });
+
+        return rankings;
     }
 
     function checkImmediateWinnerOnDisconnect() {
@@ -56,25 +108,23 @@ function registerSocketHandlers(io) {
         const survivors = activeEntered.filter(p => p.isAlive);
 
         if (survivors.length <= 1) {
-            gameManager.gameState = 'ended';
-            let finalRankings = [];
-            if (survivors.length === 1) {
-                finalRankings.push({ rank: 1, name: survivors[0].name, life: survivors[0].life });
-            }
-
-            const deadPlayers = activeEntered.filter(p => !p.isAlive);
-            deadPlayers.sort((a, b) => b.life - a.life);
-            deadPlayers.forEach(p => {
-                finalRankings.push({ rank: finalRankings.length + 1, name: p.name, life: p.life });
-            });
-
-            gameManager.disconnectedPlayers.forEach(dp => {
-                finalRankings.push({ isDisconnected: true, name: dp.name });
-            });
-
-            io.emit('game:ended', { rankings: finalRankings });
-            broadcastGameState();
+            endGameCompletely();
         }
+    }
+
+    function endGameCompletely() {
+        gameManager.gameState = 'ended';
+        const finalRankings = computeRankings();
+        io.emit('game:ended', { rankings: finalRankings });
+
+        Object.values(gameManager.players).forEach(p => {
+            p.isEntered = false;
+            p.isReady = false;
+        });
+        gameManager.gameState = 'lobby';
+
+        broadcastGameState();
+        broadcastLobbyState();
     }
 
     function startBattlePhase() {
@@ -131,6 +181,7 @@ function registerSocketHandlers(io) {
                 }
             });
 
+            // 8: 全交戦ペア結果 (combatPairs) を含める
             const battlePayload = {
                 summary: {
                     p1Id: p1.id,
@@ -140,8 +191,7 @@ function registerSocketHandlers(io) {
                     winnerId: res.winnerId,
                     winnerName: res.winnerName,
                     loserIds: res.loserIds,
-                    detailedDamagesP1: res.pairDamages[p1.id] || [],
-                    detailedDamagesP2: res.pairDamages[p2.id] || []
+                    combatPairs: res.combatPairs || []
                 },
                 logs: res.logs
             };
@@ -154,15 +204,23 @@ function registerSocketHandlers(io) {
 
         const alivePlayers = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
         alivePlayers.forEach(p => {
-            if (p.life <= 0) p.isAlive = false;
+            if (p.life <= 0) {
+                p.isAlive = false;
+                p.eliminatedRound = gameManager.round;
+            }
         });
+
         const survivors = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
         const instantGameOver = survivors.length <= 1;
 
-        activePlayers.forEach(p => {
+        Object.values(gameManager.players).forEach(p => {
             if (gameManager.allBattlesData[p.id]) {
                 io.to(p.id).emit('battle:start', {
                     ...gameManager.allBattlesData[p.id],
+                    isGameOverDecided: instantGameOver
+                });
+            } else if (p.isEntered && !p.isAlive) {
+                io.to(p.id).emit('battle:start_notice', {
                     isGameOverDecided: instantGameOver
                 });
             }
@@ -172,28 +230,10 @@ function registerSocketHandlers(io) {
     }
 
     function checkEndBattlePhase() {
-        const activePlayers = Object.values(gameManager.players).filter(p => p.isEntered);
         const remaining = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
 
         if (remaining.length <= 1) {
-            gameManager.gameState = 'ended';
-            let finalRankings = [];
-            if (remaining.length === 1) {
-                finalRankings.push({ rank: 1, name: remaining[0].name, life: remaining[0].life });
-            }
-
-            const deadPlayers = activePlayers.filter(p => !p.isAlive);
-            deadPlayers.sort((a, b) => b.life - a.life);
-            deadPlayers.forEach(p => {
-                finalRankings.push({ rank: finalRankings.length + 1, name: p.name, life: p.life });
-            });
-
-            gameManager.disconnectedPlayers.forEach(dp => {
-                finalRankings.push({ isDisconnected: true, name: dp.name });
-            });
-
-            io.emit('game:ended', { rankings: finalRankings });
-            broadcastGameState();
+            endGameCompletely();
             return;
         }
 
@@ -219,21 +259,28 @@ function registerSocketHandlers(io) {
         const player = gameManager.addPlayer(socket.id, `プレイヤー_${socket.id.substring(0, 4)}`);
         broadcastLobbyState();
 
-        socket.on('player:rename', (newName) => {
+        socket.on('player:rename', guard((newName) => {
             if (typeof newName === 'string' && newName.trim().length > 0) {
                 player.name = newName.trim().substring(0, 16);
                 broadcastLobbyState();
                 broadcastGameState();
+                notifyRoundMatchups();
             }
-        });
+        }));
 
-        socket.on('lobby:toggleEntry', () => {
+        socket.on('lobby:toggleEntry', guard(() => {
             if (gameManager.gameState !== 'lobby') return;
+            const enteredCount = Object.values(gameManager.players).filter(p => p.isEntered).length;
+
+            if (!player.isEntered && enteredCount >= 10) {
+                return;
+            }
+
             player.isEntered = !player.isEntered;
             broadcastLobbyState();
-        });
+        }));
 
-        socket.on('lobby:startGame', () => {
+        socket.on('lobby:startGame', guard(() => {
             if (socket.id !== gameManager.hostSocketId || gameManager.gameState !== 'lobby') return;
             const entered = Object.values(gameManager.players).filter(p => p.isEntered);
             if (entered.length < 2) return;
@@ -252,10 +299,12 @@ function registerSocketHandlers(io) {
 
             notifyRoundMatchups();
             broadcastGameState();
-        });
+        }));
 
-        socket.on('shop:buy', ({ shopIndex }) => {
+        socket.on('shop:buy', guard(({ shopIndex }) => {
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
+            if (!Number.isInteger(shopIndex) || shopIndex < 0 || shopIndex > 5) return;
+
             const item = player.shop[shopIndex];
             if (!item || !item.card || player.gold < item.card.cost) return;
 
@@ -269,10 +318,13 @@ function registerSocketHandlers(io) {
                 hand: player.hand,
                 shop: player.shop
             });
-        });
+        }));
 
-        socket.on('shop:buyAndDeploy', ({ shopIndex, slotIndex, previousCardUid }) => {
+        socket.on('shop:buyAndDeploy', guard(({ shopIndex, slotIndex }) => {
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
+            if (!Number.isInteger(shopIndex) || shopIndex < 0 || shopIndex > 5) return;
+            if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 2) return;
+
             const item = player.shop[shopIndex];
             if (!item || !item.card || player.gold < item.card.cost) return;
 
@@ -283,9 +335,6 @@ function registerSocketHandlers(io) {
             player.hand.push(boughtCard);
             player.sortHand();
 
-            if (previousCardUid) {
-                player.selectedLineup = player.selectedLineup.filter(c => c && c.uid !== previousCardUid);
-            }
             player.selectedLineup[slotIndex] = boughtCard;
 
             socket.emit('player:sync', {
@@ -294,29 +343,33 @@ function registerSocketHandlers(io) {
                 shop: player.shop,
                 selectedLineup: player.selectedLineup
             });
-        });
+        }));
 
-        socket.on('shop:reroll', () => {
+        // 5: リロール時にも現在のラウンド別出現率を適用
+        socket.on('shop:reroll', guard(() => {
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
-            if (player.rerollShop()) {
+            if (player.rerollShop(gameManager.round)) {
                 socket.emit('player:sync', {
                     gold: player.gold,
                     shop: player.shop
                 });
             }
-        });
+        }));
 
-        socket.on('shop:toggleLock', ({ shopIndex }) => {
+        socket.on('shop:toggleLock', guard(({ shopIndex }) => {
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
+            if (!Number.isInteger(shopIndex) || shopIndex < 0 || shopIndex > 5) return;
             if (player.shop[shopIndex] && player.shop[shopIndex].card) {
                 player.shop[shopIndex].locked = !player.shop[shopIndex].locked;
                 socket.emit('player:sync', { shop: player.shop });
             }
-        });
+        }));
 
-        socket.on('market:buy', ({ marketCardUid }) => {
+        socket.on('market:buy', guard(({ marketCardUid }) => {
             if (gameManager.gameState !== 'prep' || !player.isAlive || gameManager.round < 2) return;
-            const item = gameManager.activeMarketCards.find(c => c.card.uid === marketCardUid);
+            if (typeof marketCardUid !== 'string') return;
+
+            const item = gameManager.activeMarketCards.find(c => c.card && c.card.uid === marketCardUid);
             if (!item || item.sellerId === player.id || player.purchasedMarketUids.has(marketCardUid)) return;
 
             const price = Math.floor(item.card.totalStats / 10);
@@ -338,11 +391,14 @@ function registerSocketHandlers(io) {
                 hand: player.hand
             });
             syncMarketToAll();
-        });
+        }));
 
-        socket.on('market:buyAndDeploy', ({ marketCardUid, slotIndex, previousCardUid }) => {
+        socket.on('market:buyAndDeploy', guard(({ marketCardUid, slotIndex }) => {
             if (gameManager.gameState !== 'prep' || !player.isAlive || gameManager.round < 2) return;
-            const item = gameManager.activeMarketCards.find(c => c.card.uid === marketCardUid);
+            if (typeof marketCardUid !== 'string') return;
+            if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 2) return;
+
+            const item = gameManager.activeMarketCards.find(c => c.card && c.card.uid === marketCardUid);
             if (!item || item.sellerId === player.id || player.purchasedMarketUids.has(marketCardUid)) return;
 
             const price = Math.floor(item.card.totalStats / 10);
@@ -359,9 +415,6 @@ function registerSocketHandlers(io) {
             player.hand.push(boughtCard);
             player.sortHand();
 
-            if (previousCardUid) {
-                player.selectedLineup = player.selectedLineup.filter(c => c && c.uid !== previousCardUid);
-            }
             player.selectedLineup[slotIndex] = boughtCard;
 
             socket.emit('player:sync', {
@@ -370,10 +423,12 @@ function registerSocketHandlers(io) {
                 selectedLineup: player.selectedLineup
             });
             syncMarketToAll();
-        });
+        }));
 
-        socket.on('card:synthesizeEx', ({ baseUid, source }) => {
+        socket.on('card:synthesizeEx', guard(({ baseUid, source }) => {
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
+            if (typeof baseUid !== 'string' || !source || typeof source.type !== 'string') return;
+
             const baseCard = player.hand.find(c => c.uid === baseUid);
             if (!baseCard) return;
 
@@ -387,13 +442,15 @@ function registerSocketHandlers(io) {
                 matCard = player.selectedLineup.find(c => c && c.uid === source.uid);
                 if (!matCard || matCard.uid === baseUid) return;
             } else if (source.type === 'shop') {
+                if (!Number.isInteger(source.shopIndex) || source.shopIndex < 0 || source.shopIndex > 5) return;
                 const item = player.shop[source.shopIndex];
                 if (!item || !item.card) return;
                 matCard = item.card;
                 cost = matCard.cost;
                 if (player.gold < cost) return;
             } else if (source.type === 'market') {
-                const item = gameManager.activeMarketCards.find(c => c.card.uid === source.marketCardUid);
+                if (typeof source.marketCardUid !== 'string') return;
+                const item = gameManager.activeMarketCards.find(c => c.card && c.card.uid === source.marketCardUid);
                 if (!item || item.sellerId === player.id || player.purchasedMarketUids.has(source.marketCardUid)) return;
                 matCard = item.card;
                 cost = Math.floor(matCard.totalStats / 10);
@@ -420,6 +477,7 @@ function registerSocketHandlers(io) {
 
                 if (source.type === 'hand') {
                     player.hand = player.hand.filter(c => c.uid !== matCard.uid);
+                    player.selectedLineup = player.selectedLineup.map(c => (c && c.uid === matCard.uid ? null : c));
                 } else if (source.type === 'deploy') {
                     player.selectedLineup = player.selectedLineup.map(c => (c && c.uid === matCard.uid ? null : c));
                     player.hand = player.hand.filter(c => c.uid !== matCard.uid);
@@ -440,14 +498,15 @@ function registerSocketHandlers(io) {
                 });
                 socket.emit('synthesize:success', { baseUid });
             }
-        });
+        }));
 
-        socket.on('card:discard', ({ cardUid }) => {
+        socket.on('card:discard', guard(({ cardUid }) => {
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
+            if (typeof cardUid !== 'string') return;
+
             const card = player.hand.find(c => c.uid === cardUid);
             if (!card) return;
 
-            // 2: 解雇ゴールド計算方式の変更（ショップ購入額 × ★数値 ÷ 2 または 4、小数点以下切り捨て）
             const cost = RARITY_SETTINGS[card.rarity] ? RARITY_SETTINGS[card.rarity].cost : (card.cost || 2);
             const stars = card.starCount || 1;
             const gainGold = card.isMarketCard
@@ -470,22 +529,18 @@ function registerSocketHandlers(io) {
                 hand: player.hand,
                 selectedLineup: player.selectedLineup
             });
-        });
+        }));
 
-        socket.on('player:updateLineup', ({ lineupUids }) => {
+        socket.on('player:updateLineup', guard(({ lineupUids }) => {
+            // 3: 敗北・脱落プレイヤーの操作を遮断
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
-            player.selectedLineup = lineupUids
-                .map(uid => player.hand.find(c => c && c.uid === uid))
-                .filter(Boolean)
-                .slice(0, 3);
-        });
+            player.selectedLineup = normalizeLineup(player, lineupUids);
+        }));
 
-        socket.on('player:setReady', ({ lineupUids }) => {
+        socket.on('player:setReady', guard(({ lineupUids }) => {
+            // 3: 敗北・脱落プレイヤーの準備完了操作を確実に無効化
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
-            player.selectedLineup = lineupUids
-                .map(uid => player.hand.find(c => c && c.uid === uid))
-                .filter(Boolean)
-                .slice(0, 3);
+            player.selectedLineup = normalizeLineup(player, lineupUids);
 
             player.isReady = true;
             broadcastGameState();
@@ -494,16 +549,19 @@ function registerSocketHandlers(io) {
             if (active.every(p => p.isReady)) {
                 startBattlePhase();
             }
-        });
+        }));
 
-        socket.on('battle:next', () => {
+        // 1: バトルリザルト画面で「次へ」をクリックした際、待機ランプ(isReady)を点灯し同期
+        socket.on('battle:next', guard(() => {
+            if (gameManager.gameState !== 'battle' || !player.isAlive || player.hasClickedNext) return;
             player.hasClickedNext = true;
-            player.isReady = true;
-            broadcastGameState();
+            player.isReady = true; // 待機ランプを点灯
+            broadcastGameState();  // 他プレイヤーおよび自身の画面にリアルタイム同期
             checkEndBattlePhase();
-        });
+        }));
 
-        socket.on('spectate:getBattle', ({ targetPlayerId }) => {
+        socket.on('spectate:getBattle', guard(({ targetPlayerId }) => {
+            if (typeof targetPlayerId !== 'string') return;
             if (gameManager.allBattlesData[targetPlayerId]) {
                 const survivors = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
                 socket.emit('battle:start', {
@@ -511,61 +569,35 @@ function registerSocketHandlers(io) {
                     isGameOverDecided: survivors.length <= 1
                 });
             }
-        });
+        }));
 
-        socket.on('game:forceEnd', () => {
+        socket.on('game:forceEnd', guard(() => {
             if (socket.id !== gameManager.hostSocketId) return;
-            gameManager.gameState = 'ended';
+            if (gameManager.gameState !== 'prep' && gameManager.gameState !== 'battle') return;
+            endGameCompletely();
+        }));
 
-            const active = Object.values(gameManager.players).filter(p => p.isEntered);
-            active.sort((a, b) => b.life - a.life);
-
-            let rankings = [];
-            let curRank = 1;
-            for (let i = 0; i < active.length; i++) {
-                if (i > 0 && active[i].life < active[i - 1].life) {
-                    curRank = i + 1;
-                }
-                rankings.push({ rank: curRank, name: active[i].name, life: active[i].life });
-            }
-
-            gameManager.disconnectedPlayers.forEach(dp => {
-                rankings.push({ isDisconnected: true, name: dp.name });
-            });
-
-            io.emit('game:ended', { rankings });
-            broadcastGameState();
-        });
-
-        socket.on('lobby:rematch', () => {
+        socket.on('lobby:rematch', guard(() => {
             player.life = 5;
             player.gold = 20;
             player.hand = [];
             player.shop = [];
-            player.selectedLineup = [];
+            player.selectedLineup = [null, null, null];
             player.isReady = false;
             player.hasClickedNext = false;
             player.isAlive = true;
+            player.eliminatedRound = null;
             player.isEntered = true;
 
-            if (gameManager.gameState === 'ended') {
-                const anyOtherPlaying = Object.values(gameManager.players).some(p => p.id !== player.id && p.isEntered && gameManager.gameState !== 'ended');
-                if (!anyOtherPlaying) {
-                    gameManager.gameState = 'lobby';
-                    gameManager.round = 1;
-                }
-            }
             broadcastLobbyState();
             broadcastGameState();
-        });
+        }));
 
-        // 退出処理 (本人のみ確実にロビー初期状態へ戻す)
-        socket.on('lobby:leave', () => {
+        socket.on('lobby:leave', guard(() => {
             player.isEntered = false;
             player.isReady = false;
             player.isAlive = true;
 
-            // 本人に対して単独でロビー復帰同期を送信
             socket.emit('game:sync', {
                 gameState: 'lobby',
                 round: 1,
@@ -574,7 +606,7 @@ function registerSocketHandlers(io) {
             });
 
             broadcastLobbyState();
-        });
+        }));
 
         socket.on('disconnect', () => {
             gameManager.removePlayer(socket.id);
@@ -582,7 +614,8 @@ function registerSocketHandlers(io) {
             if (gameManager.gameState === 'prep') {
                 const activePlayers = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
                 Object.keys(gameManager.roundMatchups).forEach(pid => {
-                    if (gameManager.roundMatchups[pid].opponentId === socket.id) {
+                    const m = gameManager.roundMatchups[pid];
+                    if (m && (m.opponentId === socket.id || m.originalId === socket.id)) {
                         let candidates = activePlayers.filter(p => p.id !== pid);
                         if (candidates.length === 0 && gameManager.players[pid]) candidates = [gameManager.players[pid]];
                         if (candidates.length > 0) {

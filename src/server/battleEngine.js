@@ -1,9 +1,14 @@
 /**
  * src/server/battleEngine.js
- * 戦闘計算・マッチング・シミュレーションモジュール (仕様改修版)
+ * 戦闘計算・マッチング・シミュレーションモジュール (要件改修版)
  */
 
-const { ELEMENT_RELATIONS, TRIBE_BONUSES, BATTLE_HIT_RATE } = require('../../cardsData');
+const {
+    ELEMENT_RELATIONS,
+    TRIBE_BONUSES,
+    BATTLE_HIT_RATE,
+    applyPercentRoundHalfUp
+} = require('../../cardsData');
 const { Player } = require('./gameManager');
 
 /**
@@ -26,20 +31,19 @@ function applyTribeBonus(cardsInBattle, allCardsInPossession) {
 
         if (count >= 2 && TRIBE_BONUSES[c.tribe]) {
             const bonus = TRIBE_BONUSES[c.tribe];
-            const factor = 1 + (count - 1) * bonus.factor;
+            const pct = (count - 1) * bonus.percent;
 
-            // 4: 小数点以下四捨五入に変更
             if (bonus.target.includes('hp')) {
-                c.hp = Math.round(c.hp * factor);
+                c.hp = applyPercentRoundHalfUp(c.hp, pct);
                 c.maxHp = c.hp;
                 c.isHpBuffed = true;
             }
             if (bonus.target.includes('atk')) {
-                c.atk = Math.round(c.atk * factor);
+                c.atk = applyPercentRoundHalfUp(c.atk, pct);
                 c.isAtkBuffed = true;
             }
             if (bonus.target.includes('spd')) {
-                c.spd = Math.round(c.spd * factor);
+                c.spd = applyPercentRoundHalfUp(c.spd, pct);
                 c.isSpdBuffed = true;
             }
         }
@@ -51,14 +55,18 @@ function applyTribeBonus(cardsInBattle, allCardsInPossession) {
  * 1対1自動戦闘シミュレーション
  */
 function simulateBattle(p1, p2, isP2Ghost = false) {
-    const p1Bench = p1.hand.filter(c => !p1.selectedLineup.some(sc => sc && sc.uid === c.uid));
-    const p2Bench = p2.hand.filter(c => !p2.selectedLineup.some(sc => sc && sc.uid === c.uid));
+    const p1LineupCards = (p1.selectedLineup || []).filter(Boolean);
+    const p2LineupCards = (p2.selectedLineup || []).filter(Boolean);
 
-    // 自分自身のカード群のみで独立して種族補正を適用
-    const p1CombatTeam = applyTribeBonus(p1.selectedLineup.filter(Boolean), p1.hand);
-    const p2CombatTeam = applyTribeBonus(p2.selectedLineup.filter(Boolean), p2.hand);
+    const p1DeployUids = new Set(p1LineupCards.map(c => c.uid));
+    const p2DeployUids = new Set(p2LineupCards.map(c => c.uid));
 
-    // 前ラウンド終了時点の各プレイヤー自身の補正結果を保存
+    const p1Bench = p1.hand.filter(c => !p1DeployUids.has(c.uid));
+    const p2Bench = p2.hand.filter(c => !p2DeployUids.has(c.uid));
+
+    const p1CombatTeam = applyTribeBonus(p1LineupCards, p1.hand);
+    const p2CombatTeam = applyTribeBonus(p2LineupCards, p2.hand);
+
     p1.lastRoundInfo = {
         lineup: p1CombatTeam.map(c => JSON.parse(JSON.stringify(c))),
         bench: applyTribeBonus(p1Bench, p1.hand).map(c => JSON.parse(JSON.stringify(c)))
@@ -71,8 +79,8 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
     }
 
     const logs = [];
-    const pairDamagesP1 = {};
-    const pairDamagesP2 = {};
+    // 8: 交戦した全カード組み合わせ履歴 (順序維持)
+    const combatPairRecords = [];
 
     const p1TotalCount = p1CombatTeam.length;
     const p2TotalCount = p2CombatTeam.length;
@@ -94,7 +102,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             winnerName: null,
             loserIds: [p1.id, isP2Ghost ? null : p2.id].filter(Boolean),
             logs,
-            pairDamages: { [p1.id]: [], [p2.id]: [] }
+            combatPairs: []
         };
     }
     if (p1CombatTeam.length === 0) {
@@ -104,7 +112,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             winnerName: p2.name,
             loserIds: [p1.id],
             logs,
-            pairDamages: { [p1.id]: [], [p2.id]: [] }
+            combatPairs: []
         };
     }
     if (p2CombatTeam.length === 0) {
@@ -114,12 +122,12 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             winnerName: p1.name,
             loserIds: isP2Ghost ? [] : [p2.id],
             logs,
-            pairDamages: { [p1.id]: [], [p2.id]: [] }
+            combatPairs: []
         };
     }
 
     let turnCount = 0;
-    const maxTurns = 200;
+    const maxTurns = 300;
 
     let active1 = p1CombatTeam[p1Index];
     let active2 = p2CombatTeam[p2Index];
@@ -133,10 +141,32 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
 
     let nextAttacker = null;
 
+    // 現在対面しているペアの記録ポインタ
+    let currentPair = {
+        p1Card: JSON.parse(JSON.stringify(active1)),
+        p2Card: JSON.parse(JSON.stringify(active2)),
+        damageP1toP2: 0,
+        damageP2toP1: 0,
+        faintedSide: null // 'p1' | 'p2' | null
+    };
+    combatPairRecords.push(currentPair);
+
     while (p1Index < p1CombatTeam.length && p2Index < p2CombatTeam.length && turnCount < maxTurns) {
         turnCount++;
         active1 = p1CombatTeam[p1Index];
         active2 = p2CombatTeam[p2Index];
+
+        // ペアが変わったかチェック
+        if (currentPair.p1Card.uid !== active1.uid || currentPair.p2Card.uid !== active2.uid) {
+            currentPair = {
+                p1Card: JSON.parse(JSON.stringify(active1)),
+                p2Card: JSON.parse(JSON.stringify(active2)),
+                damageP1toP2: 0,
+                damageP2toP1: 0,
+                faintedSide: null
+            };
+            combatPairRecords.push(currentPair);
+        }
 
         if (!nextAttacker) {
             if (active1.spd > active2.spd) nextAttacker = 1;
@@ -168,31 +198,22 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
                 isCrit = true;
             }
             let dmg = baseDmg * attrMult * (isCrit ? 1.5 : 1.0);
-
-            // 5: 四捨五入
             finalDmg = Math.round(dmg);
 
-            // 3: クリティカル発生時は最低2、通常ヒット時は最低1
             if (isCrit) {
                 finalDmg = Math.max(2, finalDmg);
             } else {
                 finalDmg = Math.max(1, finalDmg);
             }
 
-            const key = `${atkCard.uid}__${defCard.uid}`;
-            const recordTable = attackerIsP1 ? pairDamagesP1 : pairDamagesP2;
-            if (!recordTable[key]) {
-                recordTable[key] = {
-                    atkCard: JSON.parse(JSON.stringify(atkCard)),
-                    defCard: JSON.parse(JSON.stringify(defCard)),
-                    atkCardName: atkCard.name,
-                    defCardName: defCard.name,
-                    damage: 0
-                };
+            if (attackerIsP1) {
+                currentPair.damageP1toP2 += finalDmg;
+            } else {
+                currentPair.damageP2toP1 += finalDmg;
             }
-            recordTable[key].damage += finalDmg;
         }
 
+        // 7: HPを差し引く
         defCard.hp = Math.max(0, defCard.hp - finalDmg);
 
         let logMsg = `${atkPlayer.name}の『${atkCard.name}』の攻撃！ `;
@@ -214,6 +235,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             isCrit,
             attrMult,
             counts: getCountsMeta(),
+            // 7: リアルタイム残HP同期用
             state: {
                 p1Card: JSON.parse(JSON.stringify(active1)),
                 p2Card: JSON.parse(JSON.stringify(active2))
@@ -221,10 +243,13 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         });
 
         if (defCard.hp <= 0) {
+            const faintedSide = attackerIsP1 ? 'p2' : 'p1';
+            currentPair.faintedSide = faintedSide;
+
             logs.push({
                 text: `${defPlayer.name}の『${defCard.name}』は倒れた！`,
                 damage: 0,
-                faintedSide: attackerIsP1 ? 'p2' : 'p1',
+                faintedSide,
                 counts: getCountsMeta(),
                 state: {
                     p1Card: JSON.parse(JSON.stringify(active1)),
@@ -267,20 +292,44 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
     let winnerName = null;
     let loserIds = [];
 
-    if (p1Index >= p1CombatTeam.length && p2Index >= p2CombatTeam.length) {
+    const p1Survives = p1Index < p1CombatTeam.length;
+    const p2Survives = p2Index < p2CombatTeam.length;
+
+    if (!p1Survives && !p2Survives) {
         logs.push({ text: '両者のカードが全滅しました。引き分け！', damage: 0, counts: getCountsMeta() });
         loserIds.push(p1.id);
         if (!isP2Ghost) loserIds.push(p2.id);
-    } else if (p1Index >= p1CombatTeam.length) {
+    } else if (!p1Survives) {
         logs.push({ text: `${p2.name}の勝利！`, damage: 0, counts: getCountsMeta() });
         winnerId = p2.id;
         winnerName = p2.name;
         loserIds.push(p1.id);
-    } else {
+    } else if (!p2Survives) {
         logs.push({ text: `${p1.name}の勝利！`, damage: 0, counts: getCountsMeta() });
         winnerId = p1.id;
         winnerName = p1.name;
         if (!isP2Ghost) loserIds.push(p2.id);
+    } else {
+        const p1RemCards = p1CombatTeam.length - p1Index;
+        const p2RemCards = p2CombatTeam.length - p2Index;
+        let p1TotalRemHp = p1CombatTeam.slice(p1Index).reduce((sum, c) => sum + c.hp, 0);
+        let p2TotalRemHp = p2CombatTeam.slice(p2Index).reduce((sum, c) => sum + c.hp, 0);
+
+        if (p1RemCards > p2RemCards || (p1RemCards === p2RemCards && p1TotalRemHp > p2TotalRemHp)) {
+            logs.push({ text: `規定ターン終了！ 残存数・HP優勢により ${p1.name} の勝利！`, damage: 0, counts: getCountsMeta() });
+            winnerId = p1.id;
+            winnerName = p1.name;
+            if (!isP2Ghost) loserIds.push(p2.id);
+        } else if (p2RemCards > p1RemCards || (p1RemCards === p2RemCards && p2TotalRemHp > p1TotalRemHp)) {
+            logs.push({ text: `規定ターン終了！ 残存数・HP優勢により ${p2.name} の勝利！`, damage: 0, counts: getCountsMeta() });
+            winnerId = p2.id;
+            winnerName = p2.name;
+            loserIds.push(p1.id);
+        } else {
+            logs.push({ text: `規定ターン終了！ 残存数・HP同等により引き分け！`, damage: 0, counts: getCountsMeta() });
+            loserIds.push(p1.id);
+            if (!isP2Ghost) loserIds.push(p2.id);
+        }
     }
 
     return {
@@ -288,10 +337,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         winnerName,
         loserIds,
         logs,
-        pairDamages: {
-            [p1.id]: Object.values(pairDamagesP1),
-            [p2.id]: Object.values(pairDamagesP2)
-        }
+        combatPairs: combatPairRecords
     };
 }
 

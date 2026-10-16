@@ -1,9 +1,15 @@
 /**
  * src/server/gameManager.js
- * プレイヤーおよび全体ゲーム状態の管理モジュール (仕様改修版)
+ * プレイヤーおよび全体ゲーム状態の管理モジュール (要件改修版)
  */
 
-const { createRandomShopCard, createRandomDistributedCard, TRIBE_BONUSES, RARITY_SETTINGS } = require('../../cardsData');
+const {
+    createRandomShopCard,
+    createRandomDistributedCard,
+    TRIBE_BONUSES,
+    RARITY_SETTINGS,
+    applyPercentRoundHalfUp
+} = require('../../cardsData');
 
 // 手札自動整列の順序定義
 const RARITY_ORDER = { common: 1, uncommon: 2, rare: 3, epic: 4, legend: 5 };
@@ -26,6 +32,23 @@ function sortHandCards(hand) {
     });
 }
 
+function normalizeLineup(player, slots) {
+    const used = new Set();
+    const out = [null, null, null];
+    if (!Array.isArray(slots)) return out;
+
+    for (let i = 0; i < 3; i++) {
+        const uid = slots[i];
+        if (!uid || typeof uid !== 'string') continue;
+        const card = player.hand.find(c => c && c.uid === uid);
+        if (card && !used.has(uid)) {
+            out[i] = card;
+            used.add(uid);
+        }
+    }
+    return out;
+}
+
 function calculatePlayerTribeBuffedCards(cardsToBuff, allPlayerCards) {
     const tribeCounts = {};
     allPlayerCards.forEach(c => {
@@ -42,19 +65,19 @@ function calculatePlayerTribeBuffedCards(cardsToBuff, allPlayerCards) {
 
         if (count >= 2 && TRIBE_BONUSES[c.tribe]) {
             const bonus = TRIBE_BONUSES[c.tribe];
-            const factor = 1 + (count - 1) * bonus.factor;
-            // 4: 小数点以下四捨五入に変更
+            const pct = (count - 1) * bonus.percent;
+
             if (bonus.target.includes('hp')) {
-                c.hp = Math.round(c.hp * factor);
+                c.hp = applyPercentRoundHalfUp(c.hp, pct);
                 c.maxHp = c.hp;
                 c.isHpBuffed = true;
             }
             if (bonus.target.includes('atk')) {
-                c.atk = Math.round(c.atk * factor);
+                c.atk = applyPercentRoundHalfUp(c.atk, pct);
                 c.isAtkBuffed = true;
             }
             if (bonus.target.includes('spd')) {
-                c.spd = Math.round(c.spd * factor);
+                c.spd = applyPercentRoundHalfUp(c.spd, pct);
                 c.isSpdBuffed = true;
             }
         }
@@ -70,37 +93,40 @@ class Player {
         this.life = 5;
         this.gold = 20;
         this.hand = [];
-        this.selectedLineup = []; // 出撃予定カード (最大3枚)
+        this.selectedLineup = [null, null, null];
         this.shop = [];
         this.isReady = false;
         this.hasClickedNext = false;
         this.isAlive = true;
+        this.eliminatedRound = null;
         this.rank = null;
         this.lastRoundInfo = null;
         this.purchasedMarketUids = new Set();
     }
 
-    initRoundShop() {
+    // 5: 現在のラウンド別出現率を適用してショップを補充
+    initRoundShop(round = 1) {
         this.purchasedMarketUids.clear();
         if (this.shop.length === 0) {
             for (let i = 0; i < 6; i++) {
-                this.shop.push({ card: createRandomShopCard(), locked: false });
+                this.shop.push({ card: createRandomShopCard(round), locked: false });
             }
         } else {
             for (let i = 0; i < 6; i++) {
                 if (!this.shop[i].locked) {
-                    this.shop[i] = { card: createRandomShopCard(), locked: false };
+                    this.shop[i] = { card: createRandomShopCard(round), locked: false };
                 }
             }
         }
     }
 
-    rerollShop() {
+    // 5: リロール時も現在のラウンド別出現率を適用
+    rerollShop(round = 1) {
         if (this.gold < 2) return false;
         this.gold -= 2;
         for (let i = 0; i < 6; i++) {
             if (!this.shop[i].locked) {
-                this.shop[i] = { card: createRandomShopCard(), locked: false };
+                this.shop[i] = { card: createRandomShopCard(round), locked: false };
             }
         }
         return true;
@@ -183,6 +209,7 @@ class GameManager {
             gold: p.gold,
             isReady: p.isReady,
             isAlive: p.isAlive,
+            eliminatedRound: p.eliminatedRound,
             isHost: p.id === this.hostSocketId,
             handCount: p.hand.length,
             lastRoundInfo: p.lastRoundInfo
@@ -213,14 +240,17 @@ class GameManager {
             p.life = 5;
             p.gold = 20;
             p.hand = [];
-            p.selectedLineup = [];
+            p.selectedLineup = [null, null, null];
             p.isReady = false;
             p.hasClickedNext = false;
             p.isAlive = true;
+            p.eliminatedRound = null;
             this.matchHistory[p.id] = new Set();
-            p.initRoundShop();
 
-            // 第1ラウンド配布カード
+            // 5: 第1ラウンドショップ生成
+            p.initRoundShop(1);
+
+            // 第1ラウンド配布カード (コモンのみ)
             const distCard = createRandomDistributedCard(1);
             distCard.isNewDistributed = true;
             p.hand.push(distCard);
@@ -234,18 +264,26 @@ class GameManager {
         this.activeMarketCards = [...this.pendingDiscards];
         this.pendingDiscards = [];
 
+        // 6: ラウンド開始時ゴールド付与 (R2～4: 10G, R5以降: 15G)
+        const goldBonus = this.round >= 5 ? 15 : 10;
+
         const remaining = Object.values(this.players).filter(p => p.isAlive && p.isEntered);
         remaining.forEach(p => {
-            p.gold += 10;
+            p.gold += goldBonus;
             p.isReady = false;
             p.hasClickedNext = false;
 
             // 繰り出しUIから手札へ全回収
-            p.selectedLineup = [];
+            p.selectedLineup = [null, null, null];
 
-            p.initRoundShop();
+            p.hand.forEach(c => {
+                if (c && c.isNewDistributed) delete c.isNewDistributed;
+            });
 
-            // 配布カード追加
+            // 5: 新ラウンド別出現率でショップ生成
+            p.initRoundShop(this.round);
+
+            // 新ラウンド配布カード追加
             const distCard = createRandomDistributedCard(this.round);
             distCard.isNewDistributed = true;
             p.hand.push(distCard);
@@ -256,13 +294,12 @@ class GameManager {
     autoDiscardExcessCards(p) {
         let hasDiscarded = false;
         while (p.hand.length > 6) {
-            const deployUids = new Set(p.selectedLineup.map(c => c && c.uid));
+            const deployUids = new Set(p.selectedLineup.map(c => c && c.uid).filter(Boolean));
             const benchCards = p.hand.filter(c => !deployUids.has(c.uid));
             if (benchCards.length === 0) break;
 
             const target = benchCards[Math.floor(Math.random() * benchCards.length)];
 
-            // 2: 解雇ゴールド計算方式の変更（購入額 × ★ / 2 または 4、小数点以下切り捨て）
             const cost = RARITY_SETTINGS[target.rarity] ? RARITY_SETTINGS[target.rarity].cost : (target.cost || 2);
             const stars = target.starCount || 1;
             const gainGold = target.isMarketCard
@@ -288,6 +325,7 @@ class GameManager {
 module.exports = {
     Player,
     sortHandCards,
+    normalizeLineup,
     calculatePlayerTribeBuffedCards,
     gameManager: new GameManager()
 };

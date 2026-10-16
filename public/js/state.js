@@ -1,6 +1,6 @@
 /**
  * public/js/state.js
- * クライアント側状態管理およびDOM要素参照モジュール (仕様改修版)
+ * クライアント側状態管理およびDOM要素参照モジュール (完全修正版)
  */
 
 export const socket = io();
@@ -13,7 +13,7 @@ export const state = {
     isHost: false,
 
     localHand: [],
-    localDeploySlots: [null, null, null],
+    localDeploySlots: [null, null, null], // H1: 長さ3固定
     localShop: [],
     localMarket: [],
 
@@ -30,12 +30,15 @@ export const state = {
         offsetY: 0
     },
 
-    // 1: 手札へのドロップ時のアニメーション用座標待機バッファ
+    // M7: ドラッグ中の再描画によるゴースト残存防止用バッファ
+    pendingMarketSync: null,
+
+    // 手札へのドロップ時のアニメーション用座標待機バッファ
     pendingHandDropAnim: null,
 
     // バトルタイマーの完全破棄管理
     battleAnimationTimer: null,
-    battleTimeoutIds: [], // setTimeout の ID を全追跡して一括クリア可能にする
+    battleTimeoutIds: [],
 
     currentBattleData: null,
     isGameOverDecided: false,
@@ -52,6 +55,17 @@ export function clearAllBattleTimers() {
     }
     state.battleTimeoutIds.forEach(id => clearTimeout(id));
     state.battleTimeoutIds = [];
+}
+
+// M10: プレイヤー名のHTML混入・XSS対策エスケープ関数
+export function escapeHtml(str) {
+    if (!str || typeof str !== 'string') return '';
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 // ============================
@@ -111,7 +125,6 @@ export const dom = {
     resultTitle: document.getElementById('result-title'),
     resultSummaryText: document.getElementById('result-summary-text'),
     resultDamageTableBody: document.querySelector('#result-damage-table tbody'),
-    btnToggleResultLog: document.getElementById('btn-toggle-result-log'),
     resultLogDrawer: document.getElementById('result-log-drawer'),
     resultLogList: document.getElementById('result-log-list'),
     btnResultNext: document.getElementById('btn-result-next'),

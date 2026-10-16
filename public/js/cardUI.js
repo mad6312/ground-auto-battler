@@ -1,17 +1,17 @@
 /**
  * public/js/cardUI.js
- * カードUIコンポーネント生成および表示制御モジュール (仕様改修版)
+ * カードUIコンポーネント生成および表示制御モジュール (完全修正版)
  */
 
-import { state, dom, socket } from './state.js';
+import { state, dom, socket, escapeHtml } from './state.js';
 
 const TRIBE_BONUSES = {
-    'ドワーフ': { target: ['hp'], factor: 0.10 },
-    'ドラゴン': { target: ['atk'], factor: 0.10 },
-    'エルフ': { target: ['spd'], factor: 0.10 },
-    'オーク': { target: ['hp', 'atk'], factor: 0.05 },
-    'ヴァンパイア': { target: ['hp', 'spd'], factor: 0.05 },
-    'リザードマン': { target: ['atk', 'spd'], factor: 0.05 }
+    'ドワーフ': { target: ['hp'], percent: 10 },
+    'ドラゴン': { target: ['atk'], percent: 10 },
+    'エルフ': { target: ['spd'], percent: 10 },
+    'オーク': { target: ['hp', 'atk'], percent: 5 },
+    'ヴァンパイア': { target: ['hp', 'spd'], percent: 5 },
+    'リザードマン': { target: ['atk', 'spd'], percent: 5 }
 };
 
 const RARITY_ORDER = { common: 1, uncommon: 2, rare: 3, epic: 4, legend: 5 };
@@ -32,6 +32,10 @@ export function sortHandCards(cards) {
         const eB = ELEMENT_ORDER[b.element] || 99;
         return eA - eB;
     });
+}
+
+function applyPercentRoundHalfUp(val, percent) {
+    return Math.floor((val * (100 + percent) + 50) / 100);
 }
 
 export function getBuffedStats(card, shouldBuff = false) {
@@ -58,19 +62,19 @@ export function getBuffedStats(card, shouldBuff = false) {
 
     if (count >= 2 && TRIBE_BONUSES[card.tribe]) {
         const bonus = TRIBE_BONUSES[card.tribe];
-        const factor = 1 + (count - 1) * bonus.factor;
+        const pct = (count - 1) * bonus.percent;
 
-        // 4: 小数点以下四捨五入に変更
+        // M5: 浮動小数点丸め誤差のない整数演算四捨五入
         if (bonus.target.includes('hp')) {
-            hp = Math.round(hp * factor);
+            hp = applyPercentRoundHalfUp(hp, pct);
             isHpBuffed = true;
         }
         if (bonus.target.includes('atk')) {
-            atk = Math.round(atk * factor);
+            atk = applyPercentRoundHalfUp(atk, pct);
             isAtkBuffed = true;
         }
         if (bonus.target.includes('spd')) {
-            spd = Math.round(spd * factor);
+            spd = applyPercentRoundHalfUp(spd, pct);
             isSpdBuffed = true;
         }
     }
@@ -124,7 +128,7 @@ export function animateCardFlight(startRect, targetElement, onComplete) {
     document.body.appendChild(ghost);
     targetElement.style.opacity = '0';
 
-    // 強制リフローを起こし、CSS transitionの初期位置を確実に確定
+    // 強制リフロー
     void ghost.offsetHeight;
 
     const deltaX = endRect.left - startRect.left;
@@ -142,95 +146,99 @@ export function animateCardFlight(startRect, targetElement, onComplete) {
 }
 
 // ============================
-// 高性能ポインタードラッグシステム
+// 高性能ポインタードラッグシステム (M7: window監視版)
 // ============================
 let customDropHandler = null;
 export function setCustomDropHandler(handler) {
     customDropHandler = handler;
 }
 
-function initPointerDrag(cardElement, card, dragInfo) {
-    let isPointerDown = false;
-    let startX = 0;
-    let startY = 0;
-    let hasStartedDrag = false;
+let activeDragSession = null;
 
+// window単位でmove / up / cancelを処理し、途中の再描画によるリスナ切断・ゴースト残留を完全排除
+window.addEventListener('pointermove', (e) => {
+    if (!activeDragSession) return;
+    const s = activeDragSession;
+
+    const moveDist = Math.hypot(e.clientX - s.startX, e.clientY - s.startY);
+    if (!s.hasStartedDrag && moveDist > 5) {
+        s.hasStartedDrag = true;
+        const rect = s.sourceElement.getBoundingClientRect();
+
+        const ghost = s.sourceElement.cloneNode(true);
+        ghost.classList.add('custom-drag-ghost');
+        ghost.style.width = `${rect.width}px`;
+        ghost.style.height = `${rect.height}px`;
+        ghost.style.left = `${e.clientX - (s.startX - rect.left)}px`;
+        ghost.style.top = `${e.clientY - (s.startY - rect.top)}px`;
+        document.body.appendChild(ghost);
+
+        state.pointerDrag = {
+            isDragging: true,
+            dragData: { ...s.dragInfo, card: s.card },
+            ghostElement: ghost,
+            offsetX: s.startX - rect.left,
+            offsetY: s.startY - rect.top,
+            sourceElement: s.sourceElement
+        };
+
+        s.sourceElement.style.opacity = '0.35';
+        highlightSynthesizableCards(s.card, s.dragInfo.type);
+    }
+
+    if (s.hasStartedDrag && state.pointerDrag.ghostElement) {
+        const g = state.pointerDrag.ghostElement;
+        g.style.left = `${e.clientX - state.pointerDrag.offsetX}px`;
+        g.style.top = `${e.clientY - state.pointerDrag.offsetY}px`;
+    }
+});
+
+const endCurrentDrag = (e, isSuccess) => {
+    if (!activeDragSession) return;
+    const s = activeDragSession;
+    activeDragSession = null;
+
+    if (s.sourceElement) {
+        s.sourceElement.style.opacity = '1';
+    }
+    clearSynthesizableHighlights();
+
+    if (state.pointerDrag.ghostElement) {
+        state.pointerDrag.ghostElement.remove();
+    }
+
+    if (s.hasStartedDrag && isSuccess && customDropHandler && state.pointerDrag.dragData) {
+        const dropTarget = document.elementFromPoint(e.clientX, e.clientY);
+        customDropHandler(dropTarget, state.pointerDrag.dragData, e.clientX, e.clientY);
+    }
+
+    state.pointerDrag = { isDragging: false, dragData: null, ghostElement: null, offsetX: 0, offsetY: 0 };
+
+    // M7: ドラッグ中に届いていた市場更新があれば即時反映
+    if (state.pendingMarketSync) {
+        renderMarketCards();
+        updateMarketTabLabel();
+        state.pendingMarketSync = null;
+    }
+};
+
+window.addEventListener('pointerup', (e) => endCurrentDrag(e, true));
+window.addEventListener('pointercancel', (e) => endCurrentDrag(e, false));
+
+function initPointerDrag(cardElement, card, dragInfo) {
     cardElement.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return; // 左クリックのみ
         if (cardElement.dataset.nonDraggable === 'true') return;
 
-        isPointerDown = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        hasStartedDrag = false;
-        cardElement.setPointerCapture(e.pointerId);
+        activeDragSession = {
+            startX: e.clientX,
+            startY: e.clientY,
+            hasStartedDrag: false,
+            sourceElement: cardElement,
+            card,
+            dragInfo
+        };
     });
-
-    cardElement.addEventListener('pointermove', (e) => {
-        if (!isPointerDown) return;
-
-        const moveDist = Math.hypot(e.clientX - startX, e.clientY - startY);
-        if (!hasStartedDrag && moveDist > 5) {
-            hasStartedDrag = true;
-            const rect = cardElement.getBoundingClientRect();
-
-            // クローンカードを生成し、画面最上位へ追加
-            const ghost = cardElement.cloneNode(true);
-            ghost.classList.add('custom-drag-ghost');
-            ghost.style.width = `${rect.width}px`;
-            ghost.style.height = `${rect.height}px`;
-            ghost.style.left = `${e.clientX - (startX - rect.left)}px`;
-            ghost.style.top = `${e.clientY - (startY - rect.top)}px`;
-            document.body.appendChild(ghost);
-
-            state.pointerDrag = {
-                isDragging: true,
-                dragData: { ...dragInfo, card },
-                ghostElement: ghost,
-                offsetX: startX - rect.left,
-                offsetY: startY - rect.top,
-                sourceElement: cardElement
-            };
-
-            cardElement.style.opacity = '0.35';
-            highlightSynthesizableCards(card, dragInfo.type);
-        }
-
-        if (hasStartedDrag && state.pointerDrag.ghostElement) {
-            const g = state.pointerDrag.ghostElement;
-            g.style.left = `${e.clientX - state.pointerDrag.offsetX}px`;
-            g.style.top = `${e.clientY - state.pointerDrag.offsetY}px`;
-        }
-    });
-
-    const handlePointerUp = (e) => {
-        if (!isPointerDown) return;
-        isPointerDown = false;
-
-        try {
-            cardElement.releasePointerCapture(e.pointerId);
-        } catch (_) { }
-
-        if (hasStartedDrag) {
-            cardElement.style.opacity = '1';
-            clearSynthesizableHighlights();
-
-            if (state.pointerDrag.ghostElement) {
-                state.pointerDrag.ghostElement.remove();
-            }
-
-            // ドロップ先の判定 (document.elementFromPoint)
-            if (customDropHandler && state.pointerDrag.dragData) {
-                const dropTarget = document.elementFromPoint(e.clientX, e.clientY);
-                customDropHandler(dropTarget, state.pointerDrag.dragData, e.clientX, e.clientY);
-            }
-
-            state.pointerDrag = { isDragging: false, dragData: null, ghostElement: null, offsetX: 0, offsetY: 0 };
-        }
-    };
-
-    cardElement.addEventListener('pointerup', handlePointerUp);
-    cardElement.addEventListener('pointercancel', handlePointerUp);
 }
 
 /**
@@ -256,7 +264,8 @@ export function createCardElement(card, options = {}) {
 
     let kaiBadgeHtml = '';
     if (card.isMarketCard || options.isMarket) {
-        const seller = card.sellerName || options.sellerName || '他プレイヤー';
+        const rawSeller = card.sellerName || options.sellerName || '他プレイヤー';
+        const seller = escapeHtml(rawSeller); // M10: XSS対策
         kaiBadgeHtml = `
       <span class="badge-market-kai">解
         <div class="kai-balloon">解雇者：${seller}</div>
@@ -290,7 +299,7 @@ export function createCardElement(card, options = {}) {
       </div>
       ${costHtml}
     </div>
-    <div class="${nameClass}">${card.name}</div>
+    <div class="${nameClass}">${escapeHtml(card.name)}</div>
     <div class="card-stats">
       <span class="stat-hp" title="HP"><span class="stat-icon">❤</span><span class="stat-val ${hpValClass}">${stats.hp}</span></span>
       <span class="stat-atk" title="攻撃"><span class="stat-icon">⚔</span><span class="stat-val ${atkValClass}">${stats.atk}</span></span>

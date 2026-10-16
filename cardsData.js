@@ -1,18 +1,40 @@
 /**
  * cardsData.js
- * 全180種類のカードマスターデータ、属性相性、種族ボーナス定義 (改修版)
+ * 全180種類のカードマスターデータ、属性相性、種族ボーナス、出現率・スタッツ生成定義 (要件改修版)
  */
 
-// レアリティ設定
+// 4: レアリティ設定 (各スタッツの最低値 minStat を設定)
 const RARITY_SETTINGS = {
-  common: { name: 'コモン', statsTotal: 10, cost: 2, rate: 0.40, color: '#94a3b8' },
-  uncommon: { name: 'アンコモン', statsTotal: 20, cost: 4, rate: 0.25, color: '#22c55e' },
-  rare: { name: 'レア', statsTotal: 30, cost: 6, rate: 0.20, color: '#38bdf8' },
-  epic: { name: 'エピック', statsTotal: 40, cost: 8, rate: 0.10, color: '#a855f7' },
-  legend: { name: 'レジェンド', statsTotal: 50, cost: 10, rate: 0.05, color: '#facc15' }
+  common: { name: 'コモン', statsTotal: 10, cost: 2, minStat: 1, color: '#94a3b8' },
+  uncommon: { name: 'アンコモン', statsTotal: 20, cost: 4, minStat: 2, color: '#22c55e' },
+  rare: { name: 'レア', statsTotal: 30, cost: 6, minStat: 3, color: '#38bdf8' },
+  epic: { name: 'エピック', statsTotal: 40, cost: 8, minStat: 4, color: '#a855f7' },
+  legend: { name: 'レジェンド', statsTotal: 50, cost: 10, minStat: 5, color: '#facc15' }
 };
 
-// 8-1: 命中率 ((100 - (25 / 3))%) = 91.66666...%
+// 5: ラウンド別レアリティ出現率テーブル
+const RARITY_RATES_BY_ROUND = {
+  early: { // ラウンド1～4
+    common: 0.45,
+    uncommon: 0.25,
+    rare: 0.15,
+    epic: 0.10,
+    legend: 0.05
+  },
+  late: { // ラウンド5以降
+    common: 0.25,
+    uncommon: 0.225,
+    rare: 0.20,
+    epic: 0.175,
+    legend: 0.15
+  }
+};
+
+function getRarityRatesForRound(round) {
+  return round >= 5 ? RARITY_RATES_BY_ROUND.late : RARITY_RATES_BY_ROUND.early;
+}
+
+// 命中率 ((100 - (25 / 3))%) = 91.66666...%
 const BATTLE_HIT_RATE = (100 - (25 / 3)) / 100;
 
 // 属性相性表 (攻撃側 -> { weak: 与ダメ2倍になる対象, resist: 与ダメ0.5倍になる対象 })
@@ -25,7 +47,6 @@ const ELEMENT_RELATIONS = {
   '地': { weak: '雷', resist: '水' }
 };
 
-// 8-4: 防御側のカード属性に対する弱点属性（どの属性で攻撃されると2倍になるか）
 function getWeaknessElement(defElement) {
   for (const [atkElem, rel] of Object.entries(ELEMENT_RELATIONS)) {
     if (rel.weak === defElement) {
@@ -35,15 +56,19 @@ function getWeaknessElement(defElement) {
   return null;
 }
 
-// 種族ボーナス設定
+// 種族ボーナス設定 (百分率整数)
 const TRIBE_BONUSES = {
-  'ドワーフ': { target: ['hp'], factor: 0.10 },
-  'ドラゴン': { target: ['atk'], factor: 0.10 },
-  'エルフ': { target: ['spd'], factor: 0.10 },
-  'オーク': { target: ['hp', 'atk'], factor: 0.05 },
-  'ヴァンパイア': { target: ['hp', 'spd'], factor: 0.05 },
-  'リザードマン': { target: ['atk', 'spd'], factor: 0.05 }
+  'ドワーフ': { target: ['hp'], percent: 10 },
+  'ドラゴン': { target: ['atk'], percent: 10 },
+  'エルフ': { target: ['spd'], percent: 10 },
+  'オーク': { target: ['hp', 'atk'], percent: 5 },
+  'ヴァンパイア': { target: ['hp', 'spd'], percent: 5 },
+  'リザードマン': { target: ['atk', 'spd'], percent: 5 }
 };
+
+function applyPercentRoundHalfUp(val, percent) {
+  return Math.floor((val * (100 + percent) + 50) / 100);
+}
 
 // 全180種類カードマスタ
 const CARD_MASTER = [
@@ -240,36 +265,64 @@ const CARD_MASTER = [
   { id: 'earth_lizard_5', element: '地', tribe: 'リザードマン', rarity: 'legend', name: '大地を統べる怪神・ゴジラ王 (King Gojiras, Earth God)' }
 ];
 
-function generateRandomStats(total) {
-  let remaining = total - 3;
-  let p1 = Math.floor(Math.random() * (remaining + 1));
-  let p2 = Math.floor(Math.random() * (remaining - p1 + 1));
-  let p3 = remaining - p1 - p2;
+/**
+ * 4: レアリティごとの最低値(minStat)を保証した上で合計(total)を公平に配分
+ */
+function generateRandomStats(total, minStat = 1) {
+  const surplus = total - (minStat * 3);
+  if (surplus <= 0) {
+    return { hp: minStat, atk: minStat, spd: minStat };
+  }
 
-  let points = [p1, p2, p3].sort(() => Math.random() - 0.5);
+  // 剰余(surplus)を非負整数3つにスターズ＆バー方式でランダム配分
+  let c1 = Math.floor(Math.random() * (surplus + 2));
+  let c2 = Math.floor(Math.random() * (surplus + 1));
+  if (c2 >= c1) c2++;
+
+  const cut1 = Math.min(c1, c2);
+  const cut2 = Math.max(c1, c2);
+
+  const p1 = cut1;
+  const p2 = cut2 - cut1 - 1;
+  const p3 = surplus - p1 - p2;
+
+  const parts = [p1, p2, p3];
+
+  // Fisher-Yates シャッフル
+  for (let i = parts.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [parts[i], parts[j]] = [parts[j], parts[i]];
+  }
 
   return {
-    hp: points[0] + 1,
-    atk: points[1] + 1,
-    spd: points[2] + 1
+    hp: minStat + parts[0],
+    atk: minStat + parts[1],
+    spd: minStat + parts[2]
   };
 }
 
 /**
- * 通常ショップ用のカードインスタンスを1枚生成 (全レアリティ対象)
+ * 5: ショップ用カード生成 (ラウンド別出現率を適用)
  */
-function createRandomShopCard() {
+function createRandomShopCard(round = 1) {
+  const rates = getRarityRatesForRound(round);
   const rand = Math.random();
+  let cumulative = 0;
   let rarity = 'common';
-  if (rand < 0.40) rarity = 'common';
-  else if (rand < 0.65) rarity = 'uncommon';
-  else if (rand < 0.85) rarity = 'rare';
-  else if (rand < 0.95) rarity = 'epic';
-  else rarity = 'legend';
 
+  const rarities = ['common', 'uncommon', 'rare', 'epic', 'legend'];
+  for (const r of rarities) {
+    cumulative += rates[r];
+    if (rand <= cumulative) {
+      rarity = r;
+      break;
+    }
+  }
+
+  const setting = RARITY_SETTINGS[rarity];
   const pool = CARD_MASTER.filter(c => c.rarity === rarity);
   const base = pool[Math.floor(Math.random() * pool.length)];
-  const stats = generateRandomStats(RARITY_SETTINGS[rarity].statsTotal);
+  const stats = generateRandomStats(setting.statsTotal, setting.minStat);
 
   return {
     uid: 'card_' + Math.random().toString(36).substring(2, 9),
@@ -278,26 +331,23 @@ function createRandomShopCard() {
     element: base.element,
     tribe: base.tribe,
     rarity: base.rarity,
-    cost: RARITY_SETTINGS[rarity].cost,
+    cost: setting.cost,
     hp: stats.hp,
     maxHp: stats.hp,
     atk: stats.atk,
     spd: stats.spd,
-    totalStats: RARITY_SETTINGS[rarity].statsTotal,
-    starCount: 1 // 9-1: 初期値は★1
+    totalStats: setting.statsTotal,
+    starCount: 1
   };
 }
 
 /**
- * 10-3: ラウンドごとの配布カードのレアリティ解放
- * R1: コモン
- * R2: アンコモン解放
- * R3: レア解放
- * R4: エピック解放
- * R5以降: レジェンド解放
- * 各レアリティの元確率比率 (40:25:20:10:5) を維持して抽選
+ * 5: ラウンド開始時配布カード生成
+ * 解放条件 (R1:コモンのみ, R2:アンコモン解放, R3:レア解放, R4:エピック解放, R5+:レジェンド解放) を厳格に維持し、
+ * 解放済みのレアリティについてラウンド別出現率の比率で抽選
  */
 function createRandomDistributedCard(round) {
+  const rates = getRarityRatesForRound(round);
   const availableRarities = ['common'];
   if (round >= 2) availableRarities.push('uncommon');
   if (round >= 3) availableRarities.push('rare');
@@ -306,7 +356,7 @@ function createRandomDistributedCard(round) {
 
   let totalWeight = 0;
   availableRarities.forEach(r => {
-    totalWeight += RARITY_SETTINGS[r].rate;
+    totalWeight += rates[r];
   });
 
   const rand = Math.random() * totalWeight;
@@ -314,16 +364,17 @@ function createRandomDistributedCard(round) {
   let chosenRarity = availableRarities[0];
 
   for (const r of availableRarities) {
-    cumulative += RARITY_SETTINGS[r].rate;
+    cumulative += rates[r];
     if (rand <= cumulative) {
       chosenRarity = r;
       break;
     }
   }
 
+  const setting = RARITY_SETTINGS[chosenRarity];
   const pool = CARD_MASTER.filter(c => c.rarity === chosenRarity);
   const base = pool[Math.floor(Math.random() * pool.length)];
-  const stats = generateRandomStats(RARITY_SETTINGS[chosenRarity].statsTotal);
+  const stats = generateRandomStats(setting.statsTotal, setting.minStat);
 
   return {
     uid: 'card_' + Math.random().toString(36).substring(2, 9),
@@ -332,22 +383,25 @@ function createRandomDistributedCard(round) {
     element: base.element,
     tribe: base.tribe,
     rarity: base.rarity,
-    cost: RARITY_SETTINGS[chosenRarity].cost,
+    cost: setting.cost,
     hp: stats.hp,
     maxHp: stats.hp,
     atk: stats.atk,
     spd: stats.spd,
-    totalStats: RARITY_SETTINGS[chosenRarity].statsTotal,
-    starCount: 1 // 9-1: 初期値は★1
+    totalStats: setting.statsTotal,
+    starCount: 1
   };
 }
 
 module.exports = {
   RARITY_SETTINGS,
+  RARITY_RATES_BY_ROUND,
+  getRarityRatesForRound,
   BATTLE_HIT_RATE,
   ELEMENT_RELATIONS,
   getWeaknessElement,
   TRIBE_BONUSES,
+  applyPercentRoundHalfUp,
   CARD_MASTER,
   generateRandomStats,
   createRandomShopCard,

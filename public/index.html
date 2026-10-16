@@ -29,7 +29,7 @@
         </div>
     </header>
 
-    <!-- ================= 5: 各ラウンド開始時のポップアップ演出 ================= -->
+    <!-- ================= 各ラウンド開始時のポップアップ演出 ================= -->
     <div id="round-start-popup" class="round-start-overlay hidden">
         <div class="round-start-card">
             <div id="round-popup-title" class="round-popup-title">ラウンド 1</div>
@@ -176,7 +176,7 @@
         </div>
     </div>
 
-    <!-- ================= 4. バトルリザルト画面 (4: ログ常時展開・ボタン削除) ================= -->
+    <!-- ================= 4. バトルリザルト画面 ================= -->
     <div id="result-modal" class="modal-overlay hidden">
         <div class="modal-content large result-split-modal-layout">
             <div class="result-modal-header">
@@ -188,11 +188,12 @@
                 <div class="result-damage-panel">
                     <h3>戦闘ダメージ詳細</h3>
                     <div class="result-damage-table-wrapper">
+                        <!-- 8-1: 「自分」「相手」「与えた合計ダメージ」の3列構成 -->
                         <table id="result-damage-table" class="data-table result-cards-table">
                             <thead>
                                 <tr>
-                                    <th>攻撃カード</th>
-                                    <th>対象カード</th>
+                                    <th>自分</th>
+                                    <th>相手</th>
                                     <th>与えた合計ダメージ</th>
                                 </tr>
                             </thead>
@@ -201,7 +202,6 @@
                     </div>
                 </div>
 
-                <!-- 4: ボタンを削除し、常時スクロール展開されるログ領域 -->
                 <div class="result-log-panel">
                     <div class="result-log-header">
                         <h3>バトル経過ログ</h3>
