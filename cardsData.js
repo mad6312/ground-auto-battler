@@ -1,7 +1,16 @@
 /**
  * cardsData.js
- * 全180種類のカードマスターデータ、属性相性、種族ボーナス、出現率・スタッツ生成定義 (完全修正版)
+ * 全180種類のカードマスターデータ、属性相性、種族ボーナス、出現率・スタッツ生成定義
  */
+
+const crypto = require('crypto');
+
+function generateSecureCardUid() {
+  if (crypto && typeof crypto.randomUUID === 'function') {
+    return 'card_' + crypto.randomUUID();
+  }
+  return 'card_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+}
 
 // レアリティ設定 (各スタッツの最低値 minStat)
 const RARITY_SETTINGS = {
@@ -122,7 +131,6 @@ const CARD_MASTER = [
   { id: 'ice_elf_5', element: '氷', tribe: 'エルフ', rarity: 'legend', name: '氷雪の絶対女王・クリスタリア (Crystalia, Absolute Ice Queen)' },
   { id: 'ice_orc_1', element: '氷', tribe: 'オーク', rarity: 'common', name: '凍えた襲撃者 (Freezing Raider)' },
   { id: 'ice_orc_2', element: '氷', tribe: 'オーク', rarity: 'uncommon', name: '氷原の蛮族 (Tundra Barbarian)' },
-  // #18-9: 誤字修正
   { id: 'ice_orc_3', element: '氷', tribe: 'オーク', rarity: 'rare', name: '凍土の砕石槌 (Glacier-Smasher)' },
   { id: 'ice_orc_4', element: '氷', tribe: 'オーク', rarity: 'epic', name: '氷結の狂乱者 (Frost-Frenzy Behemoth)' },
   { id: 'ice_orc_5', element: '氷', tribe: 'オーク', rarity: 'legend', name: '吹雪を喚ぶ覇王・フロストボーン (Frostborn, Blizzard Chieftain)' },
@@ -157,7 +165,8 @@ const CARD_MASTER = [
   { id: 'wind_orc_2', element: '風', tribe: 'オーク', rarity: 'uncommon', name: '嵐追いの闘士 (Storm-Chasing Brawler)' },
   { id: 'wind_orc_3', element: '風', tribe: 'オーク', rarity: 'rare', name: '疾風の斧術士 (Gale-Axe Berserker)' },
   { id: 'wind_orc_4', element: '風', tribe: 'オーク', rarity: 'epic', name: '竜巻の咆哮者 (Tornado Howler)' },
-  { id: 'wind_orc_5', element: '風', tribe: 'オーク', rarity: 'legend', name: '天災をもたらす暴風・ヴォルテックス (Vortex, Scourge of Winds)' },
+  // #18-9 / N-16: 重複解消のための名称変更
+  { id: 'wind_orc_5', element: '風', tribe: 'オーク', rarity: 'legend', name: '暴風の覇王ガルド・ザ・テンペスト (Gald, the Tempest Overlord)' },
   { id: 'wind_vampire_1', element: '風', tribe: 'ヴァンパイア', rarity: 'common', name: '蝙蝠の群れ (Swarm of Night Bats)' },
   { id: 'wind_vampire_2', element: '風', tribe: 'ヴァンパイア', rarity: 'uncommon', name: '突風の奇襲者 (Gust Ambush Nightstalker)' },
   { id: 'wind_vampire_3', element: '風', tribe: 'ヴァンパイア', rarity: 'rare', name: '影風の暗殺貴族 (Shadow-Wind Assassin)' },
@@ -176,7 +185,8 @@ const CARD_MASTER = [
   { id: 'thunder_dragon_4', element: '雷', tribe: 'ドラゴン', rarity: 'epic', name: '轟雷の天神竜 (Thunderstorm Sovereign)' },
   { id: 'thunder_dragon_5', element: '雷', tribe: 'ドラゴン', rarity: 'legend', name: '万雷の創世神・ボルテックス (Vortex, Genesis of Lightning)' },
   { id: 'thunder_dwarf_1', element: '雷', tribe: 'ドワーフ', rarity: 'common', name: '放電技師 (Spark Technician)' },
-  { id: 'thunder_dwarf_2', element: '雷', tribe: 'ドワーフ', rarity: 'uncommon', name: '雷光の錘使い (Lightning-Hammer Smith)' },
+  // N-16: 誤記修正（錘使い → 槌使い）
+  { id: 'thunder_dwarf_2', element: '雷', tribe: 'ドワーフ', rarity: 'uncommon', name: '雷光の槌使い (Lightning-Hammer Smith)' },
   { id: 'thunder_dwarf_3', element: '雷', tribe: 'ドワーフ', rarity: 'rare', name: '避雷針の重装甲兵 (Lightning-Rod Sentinel)' },
   { id: 'thunder_dwarf_4', element: '雷', tribe: 'ドワーフ', rarity: 'epic', name: '紫電の動力機甲士 (Arc-Core Automaton)' },
   { id: 'thunder_dwarf_5', element: '雷', tribe: 'ドワーフ', rarity: 'legend', name: '雷神の槌を継ぐ者・トール (Thor, Successor of Mjolnir)' },
@@ -199,7 +209,6 @@ const CARD_MASTER = [
   { id: 'thunder_lizard_2', element: '雷', tribe: 'リザードマン', rarity: 'uncommon', name: '雷槍の守護兵 (Volt-Spear Guard)' },
   { id: 'thunder_lizard_3', element: '雷', tribe: 'リザードマン', rarity: 'rare', name: '紫電の呪術師 (Arc Shaman)' },
   { id: 'thunder_lizard_4', element: '雷', tribe: 'リザードマン', rarity: 'epic', name: '轟雷の龍鱗将軍 (Thunder-Scale General)' },
-  // #18-9: 英語名修正
   { id: 'thunder_lizard_5', element: '雷', tribe: 'リザードマン', rarity: 'legend', name: '迅雷の雷神竜人・インドラ (Indra, the Thunderclap Dragonkin)' },
 
   // ===================== 5. 水属性 (Water) =====================
@@ -264,12 +273,11 @@ const CARD_MASTER = [
   { id: 'earth_lizard_2', element: '地', tribe: 'リザードマン', rarity: 'uncommon', name: '硬鱗の防衛兵 (Hard-Scale Defender)' },
   { id: 'earth_lizard_3', element: '地', tribe: 'リザードマン', rarity: 'rare', name: '岩石の重槌士 (Rock-Mace Vanguard)' },
   { id: 'earth_lizard_4', element: '地', tribe: 'リザードマン', rarity: 'epic', name: '砂漠の大首長 (Grand Chieftain of the Dunes)' },
-  // #18-9: 既存IP類似回避のための名称変更
   { id: 'earth_lizard_5', element: '地', tribe: 'リザードマン', rarity: 'legend', name: '大地の蜥蜴王ガイア・ゾルダ (Gaia Zolda, the Earthscale Sovereign)' }
 ];
 
 /**
- * 4: レアリティごとの最低値(minStat)を保証した上で合計(total)を公平に配分
+ * レアリティごとの最低値(minStat)を保証した上で合計(total)を公平に配分
  */
 function generateRandomStats(total, minStat = 1) {
   const surplus = total - (minStat * 3);
@@ -303,7 +311,7 @@ function generateRandomStats(total, minStat = 1) {
 }
 
 /**
- * 5: ショップ用カード生成 (ラウンド別出現率を適用)
+ * ショップ用カード生成 (ラウンド別出現率を適用)
  */
 function createRandomShopCard(round = 1) {
   const rates = getRarityRatesForRound(round);
@@ -326,7 +334,7 @@ function createRandomShopCard(round = 1) {
   const stats = generateRandomStats(setting.statsTotal, setting.minStat);
 
   return {
-    uid: 'card_' + Math.random().toString(36).substring(2, 9),
+    uid: generateSecureCardUid(),
     masterId: base.id,
     name: base.name,
     element: base.element,
@@ -343,7 +351,7 @@ function createRandomShopCard(round = 1) {
 }
 
 /**
- * 5: ラウンド開始時配布カード生成
+ * ラウンド開始時配布カード生成
  */
 function createRandomDistributedCard(round) {
   const rates = getRarityRatesForRound(round);
@@ -376,7 +384,7 @@ function createRandomDistributedCard(round) {
   const stats = generateRandomStats(setting.statsTotal, setting.minStat);
 
   return {
-    uid: 'card_' + Math.random().toString(36).substring(2, 9),
+    uid: generateSecureCardUid(),
     masterId: base.id,
     name: base.name,
     element: base.element,

@@ -84,6 +84,9 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
     const p1TotalCount = p1CombatTeam.length;
     const p2TotalCount = p2CombatTeam.length;
 
+    const p1InitialTotalHp = Math.max(1, p1CombatTeam.reduce((sum, c) => sum + c.hp, 0));
+    const p2InitialTotalHp = Math.max(1, p2CombatTeam.reduce((sum, c) => sum + c.hp, 0));
+
     let p1Index = 0;
     let p2Index = 0;
 
@@ -94,6 +97,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         p2Remaining: Math.max(0, p2TotalCount - p2Index)
     });
 
+    // 両者出撃0枚の場合：両者敗北
     if (p1CombatTeam.length === 0 && p2CombatTeam.length === 0) {
         logs.push({ text: '両プレイヤーともカードが出撃していません。両者敗北！', damage: 0, counts: getCountsMeta() });
         return {
@@ -104,29 +108,57 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             combatPairs: []
         };
     }
+
+    // 要件2: p1が0枚、p2が1枚以上の場合（p2の第1カードをstateとcombatPairsに保持）
     if (p1CombatTeam.length === 0) {
-        logs.push({ text: `${p1.name}はカードを繰り出していないため強制敗北！`, damage: 0, counts: getCountsMeta() });
+        const p2FirstCard = JSON.parse(JSON.stringify(p2CombatTeam[0]));
+        logs.push({
+            text: `${p1.name}はカードを繰り出していないため強制敗北！`,
+            damage: 0,
+            counts: getCountsMeta(),
+            state: { p1Card: null, p2Card: p2FirstCard }
+        });
         return {
             winnerId: p2.id,
             winnerName: p2.name,
             loserIds: [p1.id],
             logs,
-            combatPairs: []
+            combatPairs: [{
+                p1Card: null,
+                p2Card: p2FirstCard,
+                damageP1toP2: 0,
+                damageP2toP1: 0,
+                faintedSide: null
+            }]
         };
     }
+
+    // 要件2: p2が0枚、p1が1枚以上の場合（p1の第1カードをstateとcombatPairsに保持）
     if (p2CombatTeam.length === 0) {
-        logs.push({ text: `${p2.name}はカードを繰り出していないため強制敗北！`, damage: 0, counts: getCountsMeta() });
+        const p1FirstCard = JSON.parse(JSON.stringify(p1CombatTeam[0]));
+        logs.push({
+            text: `${p2.name}はカードを繰り出していないため強制敗北！`,
+            damage: 0,
+            counts: getCountsMeta(),
+            state: { p1Card: p1FirstCard, p2Card: null }
+        });
         return {
             winnerId: p1.id,
             winnerName: p1.name,
             loserIds: isP2Ghost ? [] : [p2.id],
             logs,
-            combatPairs: []
+            combatPairs: [{
+                p1Card: p1FirstCard,
+                p2Card: null,
+                damageP1toP2: 0,
+                damageP2toP1: 0,
+                faintedSide: null
+            }]
         };
     }
 
     let turnCount = 0;
-    const maxTurns = 300; // #18-6: 最大300ターン上限
+    const maxTurns = 300;
 
     let active1 = p1CombatTeam[p1Index];
     let active2 = p2CombatTeam[p2Index];
@@ -290,7 +322,6 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
     const p1Survives = p1Index < p1CombatTeam.length;
     const p2Survives = p2Index < p2CombatTeam.length;
 
-    // #18-7: 引き分け時は両者敗北扱い (loserIds に両者を含めライフ-1)
     if (!p1Survives && !p2Survives) {
         logs.push({ text: '両者のカードが全滅しました。引き分け！', damage: 0, counts: getCountsMeta() });
         loserIds.push(p1.id);
@@ -306,25 +337,26 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         winnerName = p1.name;
         if (!isP2Ghost) loserIds.push(p2.id);
     } else {
-        // #18-6: 300ターン上限到達時の残存数・HP比率による公平判定
         const p1RemCards = p1CombatTeam.length - p1Index;
         const p2RemCards = p2CombatTeam.length - p2Index;
         let p1TotalRemHp = p1CombatTeam.slice(p1Index).reduce((sum, c) => sum + c.hp, 0);
         let p2TotalRemHp = p2CombatTeam.slice(p2Index).reduce((sum, c) => sum + c.hp, 0);
 
-        if (p1RemCards > p2RemCards || (p1RemCards === p2RemCards && p1TotalRemHp > p2TotalRemHp)) {
-            logs.push({ text: `規定ターン終了！ 残存数・HP優勢により ${p1.name} の勝利！`, damage: 0, counts: getCountsMeta() });
+        const p1Ratio = p1TotalRemHp / p1InitialTotalHp;
+        const p2Ratio = p2TotalRemHp / p2InitialTotalHp;
+
+        if (p1RemCards > p2RemCards || (p1RemCards === p2RemCards && p1Ratio > p2Ratio + 1e-6)) {
+            logs.push({ text: `規定ターン終了！ 残存数・HP比率優勢により ${p1.name} の勝利！`, damage: 0, counts: getCountsMeta() });
             winnerId = p1.id;
             winnerName = p1.name;
             if (!isP2Ghost) loserIds.push(p2.id);
-        } else if (p2RemCards > p1RemCards || (p1RemCards === p2RemCards && p2TotalRemHp > p1TotalRemHp)) {
-            logs.push({ text: `規定ターン終了！ 残存数・HP優勢により ${p2.name} の勝利！`, damage: 0, counts: getCountsMeta() });
+        } else if (p2RemCards > p1RemCards || (p1RemCards === p2RemCards && p2Ratio > p1Ratio + 1e-6)) {
+            logs.push({ text: `規定ターン終了！ 残存数・HP比率優勢により ${p2.name} の勝利！`, damage: 0, counts: getCountsMeta() });
             winnerId = p2.id;
             winnerName = p2.name;
             loserIds.push(p1.id);
         } else {
-            // #18-7: 完全同等による引き分け
-            logs.push({ text: `規定ターン終了！ 残存数・HP同等により引き分け！`, damage: 0, counts: getCountsMeta() });
+            logs.push({ text: `規定ターン終了！ 残存数・HP比率同等により引き分け！`, damage: 0, counts: getCountsMeta() });
             loserIds.push(p1.id);
             if (!isP2Ghost) loserIds.push(p2.id);
         }
@@ -340,73 +372,107 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
 }
 
 /**
- * #16: Fisher-Yates シャッフルおよび再戦回数最小化マッチング
+ * Fisher-Yates シャッフルおよび再戦コスト最小化マッチング
  */
 function createRoundMatchups(activePlayers, matchHistory = {}) {
     const matchups = {};
     if (activePlayers.length === 0) return matchups;
 
-    // Fisher-Yates で偏りなくシャッフル
     let pool = [...activePlayers];
     for (let i = pool.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [pool[i], pool[j]] = [pool[j], pool[i]];
     }
 
-    const matchedIds = new Set();
+    const n = pool.length;
 
-    // 1対1ペアの選定（未対戦相手を最優先）
-    for (let i = 0; i < pool.length; i++) {
-        const p1 = pool[i];
-        if (matchedIds.has(p1.id)) continue;
+    function getMatchCost(idA, idB) {
+        const histA = matchHistory[idA];
+        if (!histA) return 0;
+        let count = 0;
+        if (histA instanceof Set) {
+            count = histA.has(idB) ? 1 : 0;
+        } else if (Array.isArray(histA)) {
+            count = histA.filter(x => x === idB).length;
+        }
+        return count * 10;
+    }
 
-        const history = matchHistory[p1.id] || new Set();
+    let oddGhostPlayer = null;
+    let chosenGhostSource = null;
 
-        let opponent = null;
-        // 未対戦の相手を探す
-        for (let j = i + 1; j < pool.length; j++) {
+    if (n % 2 !== 0) {
+        let bestOddCost = Infinity;
+        let bestOddIdx = 0;
+        let bestSource = null;
+
+        for (let i = 0; i < n; i++) {
+            const candidate = pool[i];
+            const others = pool.filter((_, idx) => idx !== i);
+            others.sort((a, b) => getMatchCost(candidate.id, a.id) - getMatchCost(candidate.id, b.id));
+            const selectedSource = others[0];
+            const cost = getMatchCost(candidate.id, selectedSource.id);
+
+            if (cost < bestOddCost) {
+                bestOddCost = cost;
+                bestOddIdx = i;
+                bestSource = selectedSource;
+            }
+        }
+
+        oddGhostPlayer = pool[bestOddIdx];
+        chosenGhostSource = bestSource;
+        pool.splice(bestOddIdx, 1);
+    }
+
+    const evenCount = pool.length;
+    let bestPairs = null;
+    let minTotalCost = Infinity;
+
+    function findBestPairing(remainingIndices, currentPairs, currentCost) {
+        if (remainingIndices.length === 0) {
+            if (currentCost < minTotalCost) {
+                minTotalCost = currentCost;
+                bestPairs = currentPairs.map(p => [...p]);
+            }
+            return;
+        }
+
+        if (currentCost >= minTotalCost) return;
+
+        const first = remainingIndices[0];
+        const rest = remainingIndices.slice(1);
+
+        for (let i = 0; i < rest.length; i++) {
+            const second = rest[i];
+            const pairCost = getMatchCost(pool[first].id, pool[second].id);
+            const nextRemaining = rest.filter((_, idx) => idx !== i);
+
+            currentPairs.push([first, second]);
+            findBestPairing(nextRemaining, currentPairs, currentCost + pairCost);
+            currentPairs.pop();
+        }
+    }
+
+    const initialIndices = Array.from({ length: evenCount }, (_, i) => i);
+    findBestPairing(initialIndices, [], 0);
+
+    if (bestPairs) {
+        bestPairs.forEach(([i, j]) => {
+            const p1 = pool[i];
             const p2 = pool[j];
-            if (!matchedIds.has(p2.id) && !history.has(p2.id)) {
-                opponent = p2;
-                break;
-            }
-        }
+            matchups[p1.id] = { opponentId: p2.id, opponentName: p2.name, isGhost: false };
+            matchups[p2.id] = { opponentId: p1.id, opponentName: p1.name, isGhost: false };
+        });
+    }
 
-        // 未対戦がいない場合、任意の相手とペア
-        if (!opponent) {
-            for (let j = i + 1; j < pool.length; j++) {
-                const p2 = pool[j];
-                if (!matchedIds.has(p2.id)) {
-                    opponent = p2;
-                    break;
-                }
-            }
-        }
-
-        if (opponent) {
-            matchups[p1.id] = { opponentId: opponent.id, opponentName: opponent.name, isGhost: false };
-            matchups[opponent.id] = { opponentId: p1.id, opponentName: p1.name, isGhost: false };
-            matchedIds.add(p1.id);
-            matchedIds.add(opponent.id);
-        } else {
-            // 奇数番目で相手が余った場合は影（ゴースト）を割り当て
-            let candidates = activePlayers.filter(p => p.id !== p1.id);
-            if (candidates.length === 0) candidates = [p1];
-
-            // 影の選定でも未対戦相手を優先
-            let unplayedCandidates = candidates.filter(c => !history.has(c.id));
-            let chosenCandidate = unplayedCandidates.length > 0
-                ? unplayedCandidates[Math.floor(Math.random() * unplayedCandidates.length)]
-                : candidates[Math.floor(Math.random() * candidates.length)];
-
-            matchups[p1.id] = {
-                opponentId: 'ghost_' + chosenCandidate.id,
-                opponentName: chosenCandidate.name + ' (影)',
-                isGhost: true,
-                originalId: chosenCandidate.id
-            };
-            matchedIds.add(p1.id);
-        }
+    if (oddGhostPlayer && chosenGhostSource) {
+        matchups[oddGhostPlayer.id] = {
+            opponentId: 'ghost_' + chosenGhostSource.id,
+            opponentName: chosenGhostSource.name + ' (影)',
+            isGhost: true,
+            originalId: chosenGhostSource.id
+        };
     }
 
     return matchups;

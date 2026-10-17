@@ -54,7 +54,7 @@ body {
     margin: 0 !important;
     opacity: 0.95 !important;
     cursor: grabbing !important;
-    transform: scale(1.04);
+    scale: 1.04;
     box-shadow: 0 16px 32px rgba(0, 0, 0, 0.8), 0 0 18px rgba(59, 130, 246, 0.7) !important;
     will-change: left, top;
 }
@@ -1002,20 +1002,24 @@ body {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
 }
 
+/* N-8: パルス強調アニメーション (box-shadowとoutlineで表現し、scale/transformと衝突させない) */
 @keyframes pulseSynth {
     0% {
         box-shadow: 0 0 6px #38bdf8, 0 0 10px #38bdf8;
-        transform: translateY(-2px) scale(1.02);
+        outline: 2px solid rgba(56, 189, 248, 0.6);
+        outline-offset: 1px;
     }
 
     50% {
         box-shadow: 0 0 16px #38bdf8, 0 0 22px #38bdf8;
-        transform: translateY(-4px) scale(1.04);
+        outline: 2px solid rgba(56, 189, 248, 1);
+        outline-offset: 2px;
     }
 
     100% {
         box-shadow: 0 0 6px #38bdf8, 0 0 10px #38bdf8;
-        transform: translateY(-2px) scale(1.02);
+        outline: 2px solid rgba(56, 189, 248, 0.6);
+        outline-offset: 1px;
     }
 }
 
@@ -1025,30 +1029,31 @@ body {
     z-index: 20;
 }
 
+/* N-8: 合成成功ポップアニメーション (個別プロパティ scale を使用して transform 衝突を回避) */
 @keyframes synthSuccessPop {
     0% {
-        transform: scale(1);
+        scale: 1;
         filter: brightness(1);
     }
 
     40% {
-        transform: scale(1.15);
+        scale: 1.15;
         filter: brightness(2) drop-shadow(0 0 15px #facc15);
     }
 
     100% {
-        transform: scale(1);
+        scale: 1;
         filter: brightness(1);
     }
 }
 
 .card-synth-success {
-    animation: synthSuccessPop 0.6s ease-out;
+    animation: synthSuccessPop 0.6s ease-out forwards;
 }
 
-/* 2: 合成アニメーション再生中にカード強調アニメーションが重なっても互いに干渉・中断せず共存 */
+/* N-8: 合成アニメーション再生中にカード強調アニメーションが重なっても互いに干渉・中断せず完全共存 */
 .card-item.card-synth-highlight.card-synth-success {
-    animation: synthSuccessPop 0.6s ease-out, pulseSynth 1.2s infinite ease-in-out !important;
+    animation: synthSuccessPop 0.6s ease-out forwards, pulseSynth 1.2s infinite ease-in-out !important;
     border-color: #38bdf8 !important;
     z-index: 25;
 }

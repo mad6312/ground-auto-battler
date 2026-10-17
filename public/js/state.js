@@ -1,6 +1,6 @@
 /**
  * public/js/state.js
- * クライアント側状態管理およびDOM要素参照モジュール (完全修正版)
+ * クライアント側状態管理およびDOM要素参照モジュール (要件改修版)
  */
 
 export const socket = io();
@@ -40,7 +40,14 @@ export const state = {
     isGameOverDecided: false,
     pendingReadyAfterDiscard: false,
 
-    cachedOpponentsList: []
+    cachedOpponentsList: [],
+
+    // N-1, N-13, N-14: 状態変数をstate内に集約
+    latestRankings: null,
+    hasClickedNextInBattle: false,
+    displayedLifeMap: new Map(),
+    currentDistributeCardUid: null,
+    isRoundPopupPlaying: false
 };
 
 // すべてのバトル関連タイマーを安全に全破棄する関数
@@ -53,7 +60,7 @@ export function clearAllBattleTimers() {
     state.battleTimeoutIds = [];
 }
 
-// #1, #2, #14: クライアント側ゲーム状態および開いているモーダルの一括リセット
+// N-1, N-14: クライアント側ゲーム状態および開いているモーダルの一括完全リセット
 export function resetClientGameState() {
     clearAllBattleTimers();
 
@@ -69,15 +76,23 @@ export function resetClientGameState() {
     state.currentBattleData = null;
     state.isGameOverDecided = false;
     state.pendingReadyAfterDiscard = false;
+    state.latestRankings = null;
+    state.hasClickedNextInBattle = false;
+    state.displayedLifeMap.clear();
+    state.currentDistributeCardUid = null;
+    state.isRoundPopupPlaying = false;
+    state.currentOpponentName = '未定';
 
     // モーダルの完全非表示
-    dom.modalOverhand.classList.add('hidden');
-    dom.modalConfirm.classList.add('hidden');
-    dom.modalHistory.classList.add('hidden');
-    dom.modalSettings.classList.add('hidden');
-    dom.battleScreen.classList.add('hidden');
-    dom.resultModal.classList.add('hidden');
-    dom.waitAnnouncementBanner.classList.add('hidden');
+    if (dom.modalOverhand) dom.modalOverhand.classList.add('hidden');
+    if (dom.modalConfirm) dom.modalConfirm.classList.add('hidden');
+    if (dom.modalHistory) dom.modalHistory.classList.add('hidden');
+    if (dom.modalSettings) dom.modalSettings.classList.add('hidden');
+    if (dom.modalTips) dom.modalTips.classList.add('hidden');
+    if (dom.battleScreen) dom.battleScreen.classList.add('hidden');
+    if (dom.resultModal) dom.resultModal.classList.add('hidden');
+    if (dom.waitAnnouncementBanner) dom.waitAnnouncementBanner.classList.add('hidden');
+    if (dom.roundStartPopup) dom.roundStartPopup.classList.add('hidden');
 }
 
 // プレイヤー名エスケープ関数
@@ -91,7 +106,8 @@ export function escapeHtml(str) {
         .replace(/'/g, '&#039;');
 }
 
-// #18-8: トーストメッセージ表示
+// N-15: トーストメッセージ表示 (タイマー重複クリア付き)
+let toastTimer = null;
 export function showToast(msg) {
     let toast = document.getElementById('game-toast');
     if (!toast) {
@@ -102,8 +118,13 @@ export function showToast(msg) {
     }
     toast.textContent = msg;
     toast.classList.add('show');
-    setTimeout(() => {
+
+    if (toastTimer) {
+        clearTimeout(toastTimer);
+    }
+    toastTimer = setTimeout(() => {
         toast.classList.remove('show');
+        toastTimer = null;
     }, 2000);
 }
 
@@ -116,6 +137,7 @@ export const dom = {
     roundIndicator: document.getElementById('round-indicator'),
     nextOpponentIndicator: document.getElementById('next-opponent-indicator'),
     waitAnnouncementBanner: document.getElementById('wait-announcement-banner'),
+    roundStartPopup: document.getElementById('round-start-popup'),
 
     lobbyEntryCount: document.getElementById('lobby-entry-count'),
     lobbyEntryBadge: document.getElementById('lobby-entry-badge'),

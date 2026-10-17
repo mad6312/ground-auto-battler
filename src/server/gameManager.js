@@ -3,6 +3,7 @@
  * プレイヤーおよび全体ゲーム状態の管理モジュール (完全修正版)
  */
 
+const crypto = require('crypto');
 const {
     createRandomShopCard,
     createRandomDistributedCard,
@@ -10,6 +11,13 @@ const {
     RARITY_SETTINGS,
     applyPercentRoundHalfUp
 } = require('../../cardsData');
+
+function generateSecureCardUid() {
+    if (crypto && typeof crypto.randomUUID === 'function') {
+        return 'card_' + crypto.randomUUID();
+    }
+    return 'card_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+}
 
 // 手札自動整列の順序定義
 const RARITY_ORDER = { common: 1, uncommon: 2, rare: 3, epic: 4, legend: 5 };
@@ -167,6 +175,7 @@ class GameManager {
             this.disconnectedPlayers.push({ name: p.name });
         }
         delete this.players[id];
+        delete this.matchHistory[id];
         this.updateHost();
 
         if (Object.keys(this.players).length === 0) {
@@ -181,7 +190,7 @@ class GameManager {
         this.pendingDiscards = [];
         this.activeMarketCards = [];
         this.allBattlesData = {};
-        this.roundMatchups = {}; // #11: マッチング情報のクリア
+        this.roundMatchups = {};
         this.disconnectedPlayers = [];
         this.matchHistory = {};
         this.hostSocketId = null;
@@ -223,13 +232,13 @@ class GameManager {
         const target2 = originalGhostId || p2Id;
         this.matchHistory[p1Id].add(target2);
 
-        // #16: 影戦の場合も相手(コピー元)の履歴に対称に記録
         if (this.players[target2]) {
             if (!this.matchHistory[target2]) this.matchHistory[target2] = new Set();
             this.matchHistory[target2].add(p1Id);
         }
     }
 
+    // 要件2: 2試合目開始時の完全初期化
     resetGameForStart() {
         this.gameState = 'prep';
         this.round = 1;
@@ -237,7 +246,7 @@ class GameManager {
         this.activeMarketCards = [];
         this.disconnectedPlayers = [];
         this.matchHistory = {};
-        this.roundMatchups = {}; // #11: クリア
+        this.roundMatchups = {};
         this.gameOverDecided = false;
         this.battleParticipants.clear();
 
@@ -320,7 +329,6 @@ class GameManager {
             const discardCard = JSON.parse(JSON.stringify(target));
             if (discardCard.isNewDistributed) delete discardCard.isNewDistributed;
 
-            // #7: 再売却時は今回の売却者を解雇者名として設定
             discardCard.sellerName = p.name;
 
             this.pendingDiscards.push({
@@ -342,5 +350,6 @@ module.exports = {
     sortHandCards,
     normalizeLineup,
     calculatePlayerTribeBuffedCards,
+    generateSecureCardUid,
     gameManager: new GameManager()
 };

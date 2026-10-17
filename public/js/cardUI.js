@@ -89,14 +89,21 @@ export function getBuffedStats(card, shouldBuff = false) {
     return { hp, atk, spd, isHpBuffed, isAtkBuffed, isSpdBuffed };
 }
 
+/**
+ * 要件1: 同レアリティ・同種族カードの強調アニメーション適用範囲
+ * 対象: 手札UI, ショップ陳列, 解雇市場陳列, 繰り出しUI(出撃スロット)
+ * 対象外: 前ラウンド情報モーダル, バトルリザルト画面, Tips等のカードUI
+ */
 export function highlightSynthesizableCards(sourceCard, sourceArea) {
     if (!sourceCard) return;
     const allowedAreas = ['shop', 'market', 'deploy', 'hand'];
     if (!allowedAreas.includes(sourceArea)) return;
     if (!dom.modalOverhand.classList.contains('hidden')) return;
 
-    const allCards = document.querySelectorAll('.card-item');
-    allCards.forEach(el => {
+    const validContainersSelector = '#player-hand .card-item, #shop-cards .card-item, #market-cards .card-item, .slots-container .card-item';
+    const targetCardElements = document.querySelectorAll(validContainersSelector);
+
+    targetCardElements.forEach(el => {
         const cardData = el.__cardData;
         if (cardData && cardData.uid !== sourceCard.uid) {
             if (cardData.rarity === sourceCard.rarity && cardData.tribe === sourceCard.tribe) {
@@ -137,13 +144,22 @@ export function animateCardFlight(startRect, targetElement, onComplete) {
     const deltaX = endRect.left - startRect.left;
     const deltaY = endRect.top - startRect.top;
 
+    let hasCleanedUp = false;
+    const cleanup = () => {
+        if (hasCleanedUp) return;
+        hasCleanedUp = true;
+        targetElement.style.opacity = '1';
+        if (ghost.parentNode) ghost.remove();
+        if (onComplete) onComplete();
+    };
+
+    const safetyTimer = setTimeout(cleanup, 450);
+
     requestAnimationFrame(() => {
         ghost.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
-
         setTimeout(() => {
-            targetElement.style.opacity = '1';
-            ghost.remove();
-            if (onComplete) onComplete();
+            clearTimeout(safetyTimer);
+            cleanup();
         }, 390);
     });
 }
@@ -166,7 +182,7 @@ function updateDropzoneHighlight(dropTarget) {
     }
     if (!dropTarget) return;
 
-    const zone = dropTarget.closest('.slot-dropzone, #discard-dropzone');
+    const zone = dropTarget.closest('.deploy-slot .slot-dropzone, #discard-dropzone');
     if (zone) {
         zone.classList.add('drag-over');
         currentHighlightedDropzone = zone;
@@ -215,6 +231,8 @@ window.addEventListener('pointermove', (e) => {
     const moveDist = Math.hypot(e.clientX - s.startX, e.clientY - s.startY);
     if (!s.hasStartedDrag && moveDist > 5) {
         s.hasStartedDrag = true;
+        if (s.clearTapTimer) s.clearTapTimer();
+
         const rect = s.sourceElement.getBoundingClientRect();
 
         const ghost = s.sourceElement.cloneNode(true);
@@ -257,19 +275,30 @@ window.addEventListener('blur', () => {
     }
 });
 
+let lastTouchLongTapTimestamp = 0;
+
 function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
     let longTapTimer = null;
+
+    const clearTap = () => {
+        if (longTapTimer) {
+            clearTimeout(longTapTimer);
+            longTapTimer = null;
+        }
+    };
 
     cardElement.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
         if (cardElement.dataset.nonDraggable === 'true') return;
 
-        clearTimeout(longTapTimer);
+        clearTap();
 
         if (e.pointerType === 'touch' && onContextMenu) {
             longTapTimer = setTimeout(() => {
+                lastTouchLongTapTimestamp = Date.now();
                 onContextMenu();
                 if (navigator.vibrate) navigator.vibrate(30);
+                longTapTimer = null;
             }, 500);
         }
 
@@ -279,16 +308,13 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
             hasStartedDrag: false,
             sourceElement: cardElement,
             card,
-            dragInfo
+            dragInfo,
+            clearTapTimer: clearTap
         };
     });
 
-    const clearTap = () => {
-        clearTimeout(longTapTimer);
-    };
-
     cardElement.addEventListener('pointermove', (e) => {
-        if (Math.hypot(e.clientX - (activeDragSession?.startX || 0), e.clientY - (activeDragSession?.startY || 0)) > 8) {
+        if (Math.hypot(e.clientX - (activeDragSession?.startX || 0), e.clientY - (activeDragSession?.startY || 0)) > 5) {
             clearTap();
         }
     });
@@ -338,7 +364,13 @@ export function createCardElement(card, options = {}) {
         nameClass += ' name-long';
     }
 
-    const shouldApplyBuff = (options.area === 'hand' || options.area === 'deploy' || options.isMyCombatant || options.isMyResultCard);
+    const shouldApplyBuff = (
+        options.area === 'hand' ||
+        options.area === 'deploy' ||
+        options.area === 'overhand' ||
+        options.isMyCombatant ||
+        options.isMyResultCard
+    );
     const stats = getBuffedStats(card, shouldApplyBuff);
 
     const hpValClass = stats.isHpBuffed ? 'stat-buffed' : '';
@@ -387,6 +419,9 @@ export function createCardElement(card, options = {}) {
     if (options.onContextMenu) {
         div.addEventListener('contextmenu', (e) => {
             e.preventDefault();
+            if (Date.now() - lastTouchLongTapTimestamp < 800) {
+                return;
+            }
             options.onContextMenu();
         });
     }
@@ -394,9 +429,6 @@ export function createCardElement(card, options = {}) {
     return div;
 }
 
-/**
- * 2: 解雇市場タブのラベル更新 (バトル移行時は「解雇市場 (0)」へ確実に切り替え)
- */
 export function updateMarketTabLabel() {
     if (state.currentRound >= 2) {
         dom.tabMarket.removeAttribute('disabled');
@@ -415,9 +447,16 @@ export function renderShop() {
     state.localShop.forEach((slot, index) => {
         if (!slot.card) {
             const emptyDiv = document.createElement('div');
-            emptyDiv.className = 'slot-dropzone';
+            emptyDiv.className = 'shop-soldout-placeholder';
             emptyDiv.style.width = '126px';
             emptyDiv.style.height = '148px';
+            emptyDiv.style.display = 'flex';
+            emptyDiv.style.alignItems = 'center';
+            emptyDiv.style.justifyContent = 'center';
+            emptyDiv.style.border = '2px dashed #475569';
+            emptyDiv.style.borderRadius = '6px';
+            emptyDiv.style.color = '#64748b';
+            emptyDiv.style.fontSize = '0.85rem';
             emptyDiv.textContent = '売却済み';
             dom.shopCardsContainer.appendChild(emptyDiv);
             return;
@@ -436,7 +475,6 @@ export function renderShop() {
     });
 }
 
-// 2: バトル中は解雇市場コンテナを完全に空にして非表示
 let renderedMarketUids = '';
 export function renderMarketCards() {
     if (state.currentGameState === 'battle') {
@@ -478,8 +516,13 @@ export function renderHand(syncLineupCallback, options = {}) {
             area: 'hand',
             dragInfo: { type: 'hand', uid: card.uid },
             onContextMenu: () => {
+                if (state.localDeploySlots.includes(card.uid)) return;
+
                 for (let i = 0; i < 3; i++) {
                     if (!state.localDeploySlots[i]) {
+                        // 要件1: カード移動に伴い強調アニメーションを確実にクリア
+                        clearSynthesizableHighlights();
+
                         const startRect = cardEl.getBoundingClientRect();
                         state.localDeploySlots[i] = card.uid;
                         renderHand(syncLineupCallback);
@@ -511,6 +554,9 @@ export function renderDeploySlots(syncLineupCallback) {
                     area: 'deploy',
                     dragInfo: { type: 'deploy', slotIndex: index, uid: card.uid },
                     onContextMenu: () => {
+                        // 要件1: カード移動に伴い強調アニメーションを確実にクリア
+                        clearSynthesizableHighlights();
+
                         const startRect = cardEl.getBoundingClientRect();
                         state.localDeploySlots[index] = null;
                         renderHand(syncLineupCallback);

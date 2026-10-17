@@ -6,7 +6,6 @@
 import { state, dom, socket, formatLife, renderCardDots, clearAllBattleTimers, escapeHtml } from './state.js';
 import { createCardElement } from './cardUI.js';
 
-// 3: バックグラウンドタブ監視用の30秒猶予タイマー
 let backgroundSkipTimer = null;
 
 function clearBackgroundSkipTimer() {
@@ -18,13 +17,12 @@ function clearBackgroundSkipTimer() {
 
 function startBackgroundSkipTimerIfNeeded() {
     clearBackgroundSkipTimer();
-    // バトル画面が表示中かつタブが非表示の場合に30秒タイマーを開始
     if (document.hidden && !dom.battleScreen.classList.contains('hidden') && state.battleAnimationTimer) {
         backgroundSkipTimer = setTimeout(() => {
             if (document.hidden && !dom.battleScreen.classList.contains('hidden') && state.battleAnimationTimer) {
                 skipBattle();
             }
-        }, 30000); // 30秒の猶予
+        }, 30000);
     }
 }
 
@@ -60,9 +58,6 @@ function updateCardSlotHp(cardSlotElement, newHp) {
     }
 }
 
-/**
- * 1: バトルリザルト画面内の「戦闘ダメージ詳細」および「バトル経過ログ」の縦スクロール位置を初期位置 (0) にリセット
- */
 export function resetResultModalScrollPositions() {
     const selectors = [
         '.result-damage-table-wrapper',
@@ -132,6 +127,7 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
             return;
         }
 
+        // 戦闘終了時
         if (logIndex >= logs.length) {
             clearAllBattleTimers();
             clearBackgroundSkipTimer();
@@ -140,7 +136,7 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
                 if (dom.gameOverModal.classList.contains('hidden')) {
                     showBattleResult(summary);
                 }
-            }, 1200);
+            }, 1400);
             return;
         }
 
@@ -240,6 +236,7 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
             }, 200);
         }
 
+        // 要件2: 片方のみカードが存在する場合でも確実にスロットへ描画
         if (log.state && !log.faintedSide && !log.deployedSide) {
             const leftCard = needSwap ? log.state.p2Card : log.state.p1Card;
             const rightCard = needSwap ? log.state.p1Card : log.state.p2Card;
@@ -268,17 +265,13 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
     advanceStep();
     state.battleAnimationTimer = setInterval(advanceStep, 700);
 
-    // 3: バトル移行時にタブがバックグラウンドであれば30秒スキップタイマーを開始
     startBackgroundSkipTimerIfNeeded();
 }
 
-// 3: バックグラウンド状態の変化検知（30秒以内に戻ればタイマー解除し通常演出を継続）
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
-        // フォアグラウンドに復帰したため30秒タイマーを解除
         clearBackgroundSkipTimer();
     } else {
-        // バックグラウンドになったため30秒タイマーを開始
         startBackgroundSkipTimerIfNeeded();
     }
 });
@@ -322,9 +315,6 @@ export function skipBattle() {
 
 export function showBattleResult(summary) {
     if (!dom.gameOverModal.classList.contains('hidden')) return;
-
-    // 1: リザルト画面表示直前に全スクロールバーを初期位置 (0) にリセット
-    resetResultModalScrollPositions();
 
     dom.battleScreen.classList.add('hidden');
     dom.resultModal.classList.remove('hidden');
@@ -438,12 +428,18 @@ export function showBattleResult(summary) {
             dom.resultLogList.appendChild(item);
         });
     }
+
+    requestAnimationFrame(() => {
+        resetResultModalScrollPositions();
+    });
 }
 
 export function showGameOver(rankings) {
     clearAllBattleTimers();
     clearBackgroundSkipTimer();
     cleanupCombatantVisuals();
+
+    state.pendingReadyAfterDiscard = false;
 
     dom.battleScreen.classList.add('hidden');
     dom.resultModal.classList.add('hidden');
@@ -456,7 +452,9 @@ export function showGameOver(rankings) {
 
     dom.gameOverModal.classList.remove('hidden');
 
-    const winners = rankings.filter(r => r.rank === 1 && !r.isNoWinner);
+    const hasNoWinner = rankings.some(r => r.isNoWinner);
+    const winners = hasNoWinner ? [] : rankings.filter(r => r.rank === 1 && !r.isNoWinner);
+
     if (winners.length > 0) {
         dom.winnerCelebration.classList.remove('hidden');
         dom.winnerNameDisplay.textContent = winners.map(w => w.name).join(' & ');

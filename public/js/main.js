@@ -42,13 +42,6 @@ const WEAKNESS_MAP = {
     '地': '水'
 };
 
-let isRoundPopupPlaying = false;
-let currentDistributeCardUid = null;
-let hasClickedNextInBattle = false;
-let latestRankings = null;
-
-const displayedLifeMap = new Map();
-
 function syncLineupChanges() {
     const lineupUids = [
         state.localDeploySlots[0] || null,
@@ -82,10 +75,16 @@ function showOverhandDiscardModal() {
     dom.modalOverhand.classList.remove('hidden');
 
     state.localHand.forEach(card => {
-        const cardEl = createCardElement(card, { nonDraggable: true });
+        const cardEl = createCardElement(card, { nonDraggable: true, area: 'overhand' });
         cardEl.style.cursor = 'pointer';
         cardEl.onclick = () => {
             if (isDiscardingFromModal) return;
+
+            if (state.localDeploySlots.includes(card.uid)) {
+                showToast('現在、出撃中のカードです');
+                return;
+            }
+
             isDiscardingFromModal = true;
             cardEl.style.opacity = '0.5';
 
@@ -106,9 +105,9 @@ function renderOpponentsBar() {
     const enteredPlayers = state.cachedOpponentsList.filter(p => p.isEntered);
 
     enteredPlayers.forEach(p => {
-        const showMaskedLife = (state.currentGameState === 'battle' && !hasClickedNextInBattle);
+        const showMaskedLife = (state.currentGameState === 'battle' && !state.hasClickedNextInBattle);
         const effectiveLife = showMaskedLife
-            ? (displayedLifeMap.has(p.id) ? displayedLifeMap.get(p.id) : p.life)
+            ? (state.displayedLifeMap.has(p.id) ? state.displayedLifeMap.get(p.id) : p.life)
             : p.life;
 
         const effectiveIsAlive = effectiveLife > 0;
@@ -119,13 +118,13 @@ function renderOpponentsBar() {
             dom.playerLifeDisplay.textContent = formatLife(effectiveLife);
             dom.playerGoldDisplay.textContent = `${p.gold}G`;
 
-            if (p.isReady || hasClickedNextInBattle) {
+            if (p.isReady || state.hasClickedNextInBattle) {
                 dom.playerReadyLamp.classList.add('ready');
             } else {
                 dom.playerReadyLamp.classList.remove('ready');
             }
 
-            if (!p.isAlive) {
+            if (!effectiveIsAlive) {
                 dom.btnFinishPrep.disabled = true;
             }
             return;
@@ -135,8 +134,11 @@ function renderOpponentsBar() {
         card.className = `opponent-card ${!effectiveIsAlive ? 'dead' : ''}`;
 
         let actionBtnHtml = '';
-        const isMeDead = state.myPlayer && !state.myPlayer.isAlive;
-        const isMeFinishedBattle = hasClickedNextInBattle || (state.myPlayer && (state.myPlayer.isReady || state.myPlayer.hasClickedNext));
+        const myEffectiveLife = showMaskedLife
+            ? (state.displayedLifeMap.has(state.myId) ? state.displayedLifeMap.get(state.myId) : (state.myPlayer ? state.myPlayer.life : 5))
+            : (state.myPlayer ? state.myPlayer.life : 5);
+        const isMeDead = myEffectiveLife <= 0;
+        const isMeFinishedBattle = state.hasClickedNextInBattle || (state.myPlayer && (state.myPlayer.isReady || state.myPlayer.hasClickedNext));
 
         if (isMeDead) {
             if (state.currentGameState === 'prep') {
@@ -228,19 +230,19 @@ function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
     title.textContent = `ラウンド ${roundNumber}`;
     playersText.textContent = `残プレイヤー: ${activePlayersCount}`;
 
-    isRoundPopupPlaying = true;
+    state.isRoundPopupPlaying = true;
     popup.classList.remove('hidden');
 
-    renderHand(syncLineupChanges, { hideCardUid: currentDistributeCardUid });
+    renderHand(syncLineupChanges, { hideCardUid: state.currentDistributeCardUid });
 
     setTimeout(() => {
         popup.classList.add('hidden');
-        isRoundPopupPlaying = false;
+        state.isRoundPopupPlaying = false;
 
         renderHand(syncLineupChanges);
 
-        if (currentDistributeCardUid) {
-            const targetEl = dom.playerHandContainer.querySelector(`[data-card-uid="${currentDistributeCardUid}"]`);
+        if (state.currentDistributeCardUid) {
+            const targetEl = dom.playerHandContainer.querySelector(`[data-card-uid="${state.currentDistributeCardUid}"]`);
             if (targetEl) {
                 const targetRect = targetEl.getBoundingClientRect();
                 const startRect = {
@@ -251,7 +253,7 @@ function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
                 };
                 animateCardFlight(startRect, targetEl);
             }
-            currentDistributeCardUid = null;
+            state.currentDistributeCardUid = null;
         }
     }, 1600);
 }
@@ -294,6 +296,10 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
                 slotIndex
             });
         } else if (dragData.type === 'hand') {
+            const existingSlot = state.localDeploySlots.indexOf(dragData.card.uid);
+            if (existingSlot !== -1 && existingSlot !== slotIndex) {
+                state.localDeploySlots[existingSlot] = null;
+            }
             state.localDeploySlots[slotIndex] = dragData.card.uid;
             renderHand(syncLineupChanges);
             renderDeploySlots(syncLineupChanges);
@@ -376,8 +382,12 @@ socket.on('connect', () => {
 
 socket.on('disconnect', () => {
     resetClientGameState();
+    state.currentGameState = 'lobby';
+    dom.viewGame.classList.add('hidden');
+    dom.viewLobby.classList.remove('hidden');
 });
 
+// 要件2: ロビー状態の更新とゲーム開始ボタンの可視化
 socket.on('lobby:update', (data) => {
     state.currentGameState = data.gameState;
     state.isHost = data.hostSocketId === state.myId;
@@ -389,9 +399,8 @@ socket.on('lobby:update', (data) => {
         dom.roundIndicator.classList.add('hidden');
         dom.nextOpponentIndicator.classList.add('hidden');
         dom.waitAnnouncementBanner.classList.add('hidden');
-        hasClickedNextInBattle = false;
-        latestRankings = null;
-        displayedLifeMap.clear();
+        state.hasClickedNextInBattle = false;
+        state.displayedLifeMap.clear();
     }
 
     if (me && me.isEntered) {
@@ -406,6 +415,7 @@ socket.on('lobby:update', (data) => {
         dom.lobbyEntryBadge.classList.remove('active');
     }
 
+    // ホストかつ2人以上参加中かつロビー状態なら確実に「ゲーム開始」ボタンを表示
     if (state.isHost && data.enteredCount >= 2 && state.currentGameState === 'lobby') {
         dom.btnStartGame.classList.remove('hidden');
     } else {
@@ -441,7 +451,7 @@ socket.on('market:sync', (data) => {
 socket.on('matchup:notice', ({ opponentName }) => {
     state.currentOpponentName = opponentName;
     dom.nextOpponentIndicator.textContent = `次の対戦相手: ${state.currentOpponentName}`;
-    if (state.currentGameState === 'prep') {
+    if (state.currentGameState === 'prep' && state.myPlayer && state.myPlayer.isAlive) {
         dom.nextOpponentIndicator.classList.remove('hidden');
     }
 });
@@ -468,7 +478,7 @@ socket.on('game:sync', (data) => {
 
     if (state.currentGameState === 'prep') {
         (data.players || []).forEach(p => {
-            displayedLifeMap.set(p.id, p.life);
+            state.displayedLifeMap.set(p.id, p.life);
         });
     }
 
@@ -488,9 +498,13 @@ socket.on('game:sync', (data) => {
     dom.roundIndicator.textContent = `ラウンド: ${state.currentRound}`;
     dom.roundIndicator.classList.remove('hidden');
 
-    if (state.currentGameState === 'prep') {
-        dom.nextOpponentIndicator.textContent = `次の対戦相手: ${state.currentOpponentName}`;
-        dom.nextOpponentIndicator.classList.remove('hidden');
+    if (state.currentGameState === 'prep' && me && me.isAlive) {
+        if (state.currentOpponentName && state.currentOpponentName !== '未定') {
+            dom.nextOpponentIndicator.textContent = `次の対戦相手: ${state.currentOpponentName}`;
+            dom.nextOpponentIndicator.classList.remove('hidden');
+        } else {
+            dom.nextOpponentIndicator.classList.add('hidden');
+        }
     } else {
         dom.nextOpponentIndicator.classList.add('hidden');
     }
@@ -500,7 +514,8 @@ socket.on('game:sync', (data) => {
     if (previousState !== 'prep' && state.currentGameState === 'prep') {
         dom.tabShop.click();
         state.activeSpectatingId = null;
-        hasClickedNextInBattle = false;
+        state.hasClickedNextInBattle = false;
+        state.currentOpponentName = '未定';
         dom.playerReadyLamp.classList.remove('ready');
 
         if (me && me.isAlive) {
@@ -542,7 +557,7 @@ socket.on('synthesize:success', ({ baseUid }) => {
     const cardEl = Array.from(document.querySelectorAll('.card-item')).find(el => el.__cardData?.uid === baseUid);
     if (cardEl) {
         cardEl.classList.add('card-synth-success');
-        setTimeout(() => cardEl.classList.remove('card-synth-success'), 700);
+        setTimeout(() => cardEl.classList.remove('card-synth-success'), 650);
     }
 });
 
@@ -554,7 +569,7 @@ socket.on('player:sync', (data) => {
 
         const distCard = data.hand.find(c => c.isNewDistributed);
         if (distCard) {
-            currentDistributeCardUid = distCard.uid;
+            state.currentDistributeCardUid = distCard.uid;
             delete distCard.isNewDistributed;
         }
     }
@@ -563,7 +578,7 @@ socket.on('player:sync', (data) => {
     if (data.gold !== undefined) dom.playerGoldDisplay.textContent = `${data.gold}G`;
 
     if (data.life !== undefined && state.currentGameState === 'prep') {
-        displayedLifeMap.set(state.myId, data.life);
+        state.displayedLifeMap.set(state.myId, data.life);
         dom.playerLifeDisplay.textContent = formatLife(data.life);
     }
 
@@ -576,7 +591,7 @@ socket.on('player:sync', (data) => {
     }
 
     renderHand(syncLineupChanges, {
-        hideCardUid: isRoundPopupPlaying ? currentDistributeCardUid : null
+        hideCardUid: state.isRoundPopupPlaying ? state.currentDistributeCardUid : null
     });
     renderShop();
     renderDeploySlots(syncLineupChanges);
@@ -613,27 +628,43 @@ socket.on('player:sync', (data) => {
     }
 });
 
-// 2: バトルフェーズへ移行した瞬間に解雇市場カードを非表示化し「解雇市場 (0)」へ切り替え
-socket.on('battle:start', ({ summary, logs, isGameOverDecided: gameOverFlag }) => {
+// 要件3: バトル開始時は通常通りバトル演出を実行（ランキングは内部保持）
+socket.on('battle:start', ({ summary, logs, isGameOverDecided: gameOverFlag, rankings }) => {
+    if (rankings) {
+        state.latestRankings = rankings;
+    }
+    state.isGameOverDecided = !!gameOverFlag;
+
     dom.shopCardsContainer.innerHTML = '';
     dom.marketCardsContainer.innerHTML = '';
     state.localMarket = [];
-    updateMarketTabLabel(); // 「解雇市場 (0)」へ切り替え
+    updateMarketTabLabel();
     dom.tabShop.click();
     dom.btnReroll.disabled = true;
 
     startBattleAnimation(summary, logs, gameOverFlag);
 });
 
-socket.on('battle:start_notice', () => {
+socket.on('battle:start_notice', ({ isGameOverDecided: gameOverFlag, rankings }) => {
+    if (rankings) {
+        state.latestRankings = rankings;
+    }
+    state.isGameOverDecided = !!gameOverFlag;
+
     if (state.reservedSpectateTargetId) {
         socket.emit('spectate:getBattle', { targetPlayerId: state.reservedSpectateTargetId });
     }
 });
 
+// 要件3: バトル実行中や結果画面の閲覧中は強制的に画面を奪わない
 socket.on('game:ended', ({ rankings }) => {
-    latestRankings = rankings;
-    if (dom.resultModal.classList.contains('hidden')) {
+    state.latestRankings = rankings;
+
+    const isBattling = !dom.battleScreen.classList.contains('hidden');
+    const isViewingResult = !dom.resultModal.classList.contains('hidden');
+
+    // バトル中・リザルト閲覧中でない場合にのみ即座に表示
+    if (!isBattling && !isViewingResult) {
         clearAllBattleTimers();
         showGameOver(rankings);
     }
@@ -723,39 +754,41 @@ dom.btnFinishPrep.onclick = () => {
 
 dom.btnSkipBattle.onclick = skipBattle;
 
-// 1, 5: バトルリザルト「次へ」押下処理
+// 要件3: バトルリザルト「次へ」押下時に自発的に最終順位画面へ遷移
 dom.btnResultNext.onclick = () => {
-    // 1: 「次へ」ボタンを押下した時点で両領域の縦スクロール位置を最上部 (0) にリセット
-    resetResultModalScrollPositions();
-
     clearAllBattleTimers();
     dom.resultModal.classList.add('hidden');
+    resetResultModalScrollPositions();
 
-    // 5: 最新のライフを表示キャッシュへ反映し画面を更新
     state.cachedOpponentsList.forEach(p => {
-        displayedLifeMap.set(p.id, p.life);
+        state.displayedLifeMap.set(p.id, p.life);
     });
     if (state.myPlayer) {
         dom.playerLifeDisplay.textContent = formatLife(state.myPlayer.life);
     }
     renderOpponentsBar();
 
-    if (state.activeSpectatingId) {
-        state.activeSpectatingId = null;
-        return;
-    }
-
-    if (state.isGameOverDecided || latestRankings) {
-        if (latestRankings) {
-            showGameOver(latestRankings);
+    // 決着確定時は、結果確認後に自発的に最終順位画面を表示
+    if (state.latestRankings || state.isGameOverDecided) {
+        if (state.latestRankings) {
+            showGameOver(state.latestRankings);
         }
         socket.emit('battle:next');
         return;
     }
 
+    const isSpectatingBattle = state.currentBattleData?.summary &&
+        state.currentBattleData.summary.p1Id !== state.myId &&
+        state.currentBattleData.summary.p2Id !== state.myId;
+
+    if (isSpectatingBattle) {
+        state.activeSpectatingId = null;
+        return;
+    }
+
     dom.nextOpponentIndicator.classList.add('hidden');
 
-    hasClickedNextInBattle = true;
+    state.hasClickedNextInBattle = true;
     if (state.myPlayer) {
         state.myPlayer.isReady = true;
     }
@@ -764,26 +797,25 @@ dom.btnResultNext.onclick = () => {
     dom.waitAnnouncementBanner.classList.remove('hidden');
 
     renderOpponentsBar();
-
     socket.emit('battle:next');
 };
 
+// 要件2: 再戦ボタン押下処理
 dom.btnRematch.onclick = () => {
     resetClientGameState();
     dom.gameOverModal.classList.add('hidden');
     dom.viewGame.classList.add('hidden');
     dom.viewLobby.classList.remove('hidden');
-    hasClickedNextInBattle = false;
     socket.emit('lobby:rematch');
 };
 
+// 要件2: 退出ボタン押下処理
 dom.btnLeave.onclick = () => {
     resetClientGameState();
     state.currentGameState = 'lobby';
     dom.gameOverModal.classList.add('hidden');
     dom.viewGame.classList.add('hidden');
     dom.viewLobby.classList.remove('hidden');
-    hasClickedNextInBattle = false;
     socket.emit('lobby:leave');
 };
 
