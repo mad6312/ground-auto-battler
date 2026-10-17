@@ -1,9 +1,17 @@
 /**
  * public/js/cardUI.js
- * カードUIコンポーネント生成および表示制御モジュール (完全修正版)
+ * カードUIコンポーネント生成および表示制御モジュール (要件改修版)
  */
 
 import { state, dom, socket, escapeHtml } from './state.js';
+
+const RARITY_COSTS = {
+    common: 2,
+    uncommon: 4,
+    rare: 6,
+    epic: 8,
+    legend: 10
+};
 
 const TRIBE_BONUSES = {
     'ドワーフ': { target: ['hp'], percent: 10 },
@@ -104,9 +112,6 @@ export function clearSynthesizableHighlights() {
     });
 }
 
-/**
- * カード飛翔移動アニメーション
- */
 export function animateCardFlight(startRect, targetElement, onComplete) {
     if (!startRect || !targetElement) {
         if (onComplete) onComplete();
@@ -152,11 +157,28 @@ export function setCustomDropHandler(handler) {
 }
 
 let activeDragSession = null;
+let currentHighlightedDropzone = null;
+
+function updateDropzoneHighlight(dropTarget) {
+    if (currentHighlightedDropzone) {
+        currentHighlightedDropzone.classList.remove('drag-over');
+        currentHighlightedDropzone = null;
+    }
+    if (!dropTarget) return;
+
+    const zone = dropTarget.closest('.slot-dropzone, #discard-dropzone');
+    if (zone) {
+        zone.classList.add('drag-over');
+        currentHighlightedDropzone = zone;
+    }
+}
 
 const endCurrentDrag = (e, isSuccess) => {
     if (!activeDragSession) return;
     const s = activeDragSession;
     activeDragSession = null;
+
+    updateDropzoneHighlight(null);
 
     if (s.sourceElement) {
         s.sourceElement.style.opacity = '1';
@@ -181,7 +203,6 @@ const endCurrentDrag = (e, isSuccess) => {
     }
 };
 
-// N-M4: e.buttons === 0 の検知による、ウィンドウ外ボタン離し時のドラッグ継続防止
 window.addEventListener('pointermove', (e) => {
     if (!activeDragSession) return;
 
@@ -221,23 +242,36 @@ window.addEventListener('pointermove', (e) => {
         const g = state.pointerDrag.ghostElement;
         g.style.left = `${e.clientX - state.pointerDrag.offsetX}px`;
         g.style.top = `${e.clientY - state.pointerDrag.offsetY}px`;
+
+        const target = document.elementFromPoint(e.clientX, e.clientY);
+        updateDropzoneHighlight(target);
     }
 });
 
 window.addEventListener('pointerup', (e) => endCurrentDrag(e, true));
 window.addEventListener('pointercancel', (e) => endCurrentDrag(e, false));
 
-// N-M4: ウィンドウからのフォーカス離脱時も安全にドラッグ破棄
 window.addEventListener('blur', () => {
     if (activeDragSession) {
         endCurrentDrag({ clientX: 0, clientY: 0 }, false);
     }
 });
 
-function initPointerDrag(cardElement, card, dragInfo) {
+function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
+    let longTapTimer = null;
+
     cardElement.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
         if (cardElement.dataset.nonDraggable === 'true') return;
+
+        clearTimeout(longTapTimer);
+
+        if (e.pointerType === 'touch' && onContextMenu) {
+            longTapTimer = setTimeout(() => {
+                onContextMenu();
+                if (navigator.vibrate) navigator.vibrate(30);
+            }, 500);
+        }
 
         activeDragSession = {
             startX: e.clientX,
@@ -248,6 +282,19 @@ function initPointerDrag(cardElement, card, dragInfo) {
             dragInfo
         };
     });
+
+    const clearTap = () => {
+        clearTimeout(longTapTimer);
+    };
+
+    cardElement.addEventListener('pointermove', (e) => {
+        if (Math.hypot(e.clientX - (activeDragSession?.startX || 0), e.clientY - (activeDragSession?.startY || 0)) > 8) {
+            clearTap();
+        }
+    });
+
+    cardElement.addEventListener('pointerup', clearTap);
+    cardElement.addEventListener('pointercancel', clearTap);
 }
 
 /**
@@ -264,7 +311,9 @@ export function createCardElement(card, options = {}) {
     if (options.isShop) {
         costHtml = `<span class="card-cost">${card.cost}G</span>`;
     } else if (options.isMarket) {
-        const marketPrice = Math.floor(card.totalStats / 10);
+        const baseCost = RARITY_COSTS[card.rarity] || card.cost || 2;
+        const stars = card.starCount || 1;
+        const marketPrice = Math.floor((baseCost * stars) / 2);
         costHtml = `<span class="card-cost">${marketPrice}G</span>`;
     }
 
@@ -273,7 +322,7 @@ export function createCardElement(card, options = {}) {
 
     let kaiBadgeHtml = '';
     if (card.isMarketCard || options.isMarket) {
-        const rawSeller = card.sellerName || options.sellerName || '他プレイヤー';
+        const rawSeller = options.sellerName || card.sellerName || '他プレイヤー';
         const seller = escapeHtml(rawSeller);
         kaiBadgeHtml = `
       <span class="badge-market-kai">解
@@ -332,7 +381,7 @@ export function createCardElement(card, options = {}) {
     });
 
     if (!options.nonDraggable && options.dragInfo) {
-        initPointerDrag(div, card, options.dragInfo);
+        initPointerDrag(div, card, options.dragInfo, options.onContextMenu);
     }
 
     if (options.onContextMenu) {
@@ -345,11 +394,15 @@ export function createCardElement(card, options = {}) {
     return div;
 }
 
+/**
+ * 2: 解雇市場タブのラベル更新 (バトル移行時は「解雇市場 (0)」へ確実に切り替え)
+ */
 export function updateMarketTabLabel() {
     if (state.currentRound >= 2) {
         dom.tabMarket.removeAttribute('disabled');
         dom.tabMarket.classList.remove('disabled-tab');
-        dom.tabMarket.textContent = `解雇市場(${state.localMarket.length})`;
+        const count = state.currentGameState === 'battle' ? 0 : state.localMarket.length;
+        dom.tabMarket.textContent = `解雇市場(${count})`;
     } else {
         dom.tabMarket.setAttribute('disabled', 'true');
         dom.tabMarket.classList.add('disabled-tab');
@@ -383,7 +436,21 @@ export function renderShop() {
     });
 }
 
+// 2: バトル中は解雇市場コンテナを完全に空にして非表示
+let renderedMarketUids = '';
 export function renderMarketCards() {
+    if (state.currentGameState === 'battle') {
+        dom.marketCardsContainer.innerHTML = '';
+        renderedMarketUids = '';
+        return;
+    }
+
+    const currentUids = state.localMarket.map(item => item.card.uid).join(',');
+    if (currentUids === renderedMarketUids && dom.marketCardsContainer.children.length > 0) {
+        return;
+    }
+    renderedMarketUids = currentUids;
+
     dom.marketCardsContainer.innerHTML = '';
     state.localMarket.forEach((item) => {
         const cardEl = createCardElement(item.card, {

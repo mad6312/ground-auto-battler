@@ -1,13 +1,12 @@
 /**
  * src/server/socketHandlers.js
- * Socket.io イベントハンドラモジュール (完全修正版)
+ * Socket.io イベントハンドラモジュール (要件改修版)
  */
 
 const { gameManager, Player, normalizeLineup } = require('./gameManager');
 const { simulateBattle, createRoundMatchups } = require('./battleEngine');
 const { RARITY_SETTINGS } = require('../../cardsData');
 
-// 不正ペイロード・例外によるサーバークラッシュを防ぐ共通ガードラッパー
 const guard = (fn) => (payload) => {
     try {
         fn(payload ?? {});
@@ -28,6 +27,12 @@ function registerSocketHandlers(io) {
     }
 
     function syncMarketToAll() {
+        // 4: バトルフェーズ中は解雇市場カードを非表示にするため空配列を同期
+        if (gameManager.gameState === 'battle') {
+            io.emit('market:sync', { activeMarketCards: [] });
+            return;
+        }
+
         Object.values(gameManager.players).forEach(p => {
             const filteredMarket = gameManager.activeMarketCards.filter(m =>
                 m.sellerId !== p.id && !p.purchasedMarketUids.has(m.card.uid)
@@ -61,9 +66,6 @@ function registerSocketHandlers(io) {
         });
     }
 
-    /**
-     * N-H3, N-M1: 生存者2名以上(強制終了)や同名プレイヤーにも完全対応した正確な順位計算
-     */
     function computeRankings() {
         const allEntered = Object.values(gameManager.players).filter(p => p.isEntered);
         const survivors = allEntered.filter(p => p.isAlive);
@@ -71,8 +73,11 @@ function registerSocketHandlers(io) {
 
         let rankings = [];
 
-        if (survivors.length >= 2) {
-            // N-H3: 強制終了時 - 残りライフ降順（同ライフは同順位）
+        const allLivePlayersCut = (survivors.length === 0 && gameManager.disconnectedPlayers.length > 0 && deadPlayers.every(p => p.eliminatedRound < gameManager.round));
+
+        if (allLivePlayersCut) {
+            rankings.push({ rank: '-', name: '（優勝者なし）', life: 0, isNoWinner: true });
+        } else if (survivors.length >= 2) {
             const sortedSurvivors = [...survivors].sort((a, b) => b.life - a.life);
             let currentRank = 1;
             for (let i = 0; i < sortedSurvivors.length; i++) {
@@ -83,11 +88,11 @@ function registerSocketHandlers(io) {
                     rank: currentRank,
                     id: sortedSurvivors[i].id,
                     name: sortedSurvivors[i].name,
-                    life: sortedSurvivors[i].life
+                    life: sortedSurvivors[i].life,
+                    isJointWinner: (currentRank === 1 && sortedSurvivors.filter(s => s.life === sortedSurvivors[0].life).length > 1)
                 });
             }
         } else if (survivors.length === 1) {
-            // 単独生存者
             rankings.push({
                 rank: 1,
                 id: survivors[0].id,
@@ -95,7 +100,6 @@ function registerSocketHandlers(io) {
                 life: survivors[0].life
             });
         } else if (survivors.length === 0 && deadPlayers.length > 0) {
-            // N-H1: 最終ラウンド同時全滅による同時優勝
             const maxElimRound = Math.max(...deadPlayers.map(p => p.eliminatedRound || 1));
             const jointWinners = deadPlayers.filter(p => (p.eliminatedRound || 1) === maxElimRound);
             jointWinners.forEach(p => {
@@ -109,13 +113,12 @@ function registerSocketHandlers(io) {
             });
         }
 
-        // N-M1: プレイヤーIDで判定し、同名プレイヤーが欠落する不具合を解消
-        const rankedIds = new Set(rankings.map(r => r.id));
+        const rankedIds = new Set(rankings.map(r => r.id).filter(Boolean));
         const remainingDead = deadPlayers.filter(p => !rankedIds.has(p.id));
         remainingDead.sort((a, b) => (b.eliminatedRound || 0) - (a.eliminatedRound || 0));
 
         for (let i = 0; i < remainingDead.length; i++) {
-            let rank = rankings.length + 1;
+            let rank = rankings.filter(r => !r.isNoWinner).length + 1;
             if (i > 0 && remainingDead[i].eliminatedRound === remainingDead[i - 1].eliminatedRound) {
                 rank = rankings[rankings.length - 1].rank;
             }
@@ -127,7 +130,6 @@ function registerSocketHandlers(io) {
             });
         }
 
-        // 切断プレイヤーを行末に追加
         gameManager.disconnectedPlayers.forEach(dp => {
             rankings.push({ isDisconnected: true, name: dp.name });
         });
@@ -156,6 +158,7 @@ function registerSocketHandlers(io) {
             p.isReady = false;
         });
         gameManager.gameState = 'lobby';
+        gameManager.roundMatchups = {};
 
         broadcastGameState();
         broadcastLobbyState();
@@ -199,7 +202,6 @@ function registerSocketHandlers(io) {
             gameManager.recordMatch(p1.id, m.opponentId, isGhost ? m.originalId : null);
 
             if (isGhost) {
-                // N-L3: ゴースト元が存在しない場合は他の生存プレイヤーから安全に選定
                 let ghostBase = gameManager.players[m.originalId];
                 if (!ghostBase) {
                     const fallbackCandidates = activePlayers.filter(p => p.id !== p1.id);
@@ -253,7 +255,6 @@ function registerSocketHandlers(io) {
         const survivors = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
         const instantGameOver = survivors.length <= 1;
 
-        // N-H1: バトル決着および参加者状態をマネージャに記録
         gameManager.gameOverDecided = instantGameOver;
         gameManager.battleParticipants = new Set(Object.keys(gameManager.allBattlesData));
 
@@ -275,10 +276,13 @@ function registerSocketHandlers(io) {
 
     function checkEndBattlePhase() {
         const remaining = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
+        const activeParticipants = Array.from(gameManager.battleParticipants).map(id => gameManager.players[id]).filter(Boolean);
 
-        // N-H1: 生存者が1名以下（0名含む）なら即座にゲーム終了へ
-        if (remaining.length <= 1) {
-            endGameCompletely();
+        if (gameManager.gameOverDecided || remaining.length <= 1) {
+            const allParticipantsNext = activeParticipants.length === 0 || activeParticipants.every(p => p.hasClickedNext);
+            if (allParticipantsNext) {
+                endGameCompletely();
+            }
             return;
         }
 
@@ -286,8 +290,10 @@ function registerSocketHandlers(io) {
         if (!allNext) return;
 
         gameManager.advanceToNextRound();
-        notifyRoundMatchups();
+
+        // 1: 確実に状態が prep に移行した後にマッチングを通知
         broadcastGameState();
+        notifyRoundMatchups();
 
         remaining.forEach(p => {
             io.to(p.id).emit('player:sync', {
@@ -304,21 +310,21 @@ function registerSocketHandlers(io) {
         const player = gameManager.addPlayer(socket.id, `プレイヤー_${socket.id.substring(0, 4)}`);
         broadcastLobbyState();
 
-        // N-H4: リネーム時にマッチング再生成を行わず、該当する opponentName のみを書き換えて通知
         socket.on('player:rename', guard((newName) => {
             if (typeof newName === 'string' && newName.trim().length > 0) {
                 player.name = newName.trim().substring(0, 16);
 
-                // マッチングは維持したまま、表示名のみを更新
-                Object.entries(gameManager.roundMatchups).forEach(([pid, m]) => {
-                    if (m.opponentId === player.id) {
-                        m.opponentName = player.name;
-                        io.to(pid).emit('matchup:notice', { opponentName: m.opponentName });
-                    } else if (m.isGhost && m.originalId === player.id) {
-                        m.opponentName = player.name + ' (影)';
-                        io.to(pid).emit('matchup:notice', { opponentName: m.opponentName });
-                    }
-                });
+                if (gameManager.gameState === 'prep') {
+                    Object.entries(gameManager.roundMatchups).forEach(([pid, m]) => {
+                        if (m.opponentId === player.id) {
+                            m.opponentName = player.name;
+                            io.to(pid).emit('matchup:notice', { opponentName: m.opponentName });
+                        } else if (m.isGhost && m.originalId === player.id) {
+                            m.opponentName = player.name + ' (影)';
+                            io.to(pid).emit('matchup:notice', { opponentName: m.opponentName });
+                        }
+                    });
+                }
 
                 broadcastLobbyState();
                 broadcastGameState();
@@ -354,8 +360,9 @@ function registerSocketHandlers(io) {
                 });
             });
 
-            notifyRoundMatchups();
+            // 1: ゲーム開始時、まずゲーム状態同期を行ってからマッチング通知を送出
             broadcastGameState();
+            notifyRoundMatchups();
         }));
 
         socket.on('shop:buy', guard(({ shopIndex }) => {
@@ -363,7 +370,12 @@ function registerSocketHandlers(io) {
             if (!Number.isInteger(shopIndex) || shopIndex < 0 || shopIndex > 5) return;
 
             const item = player.shop[shopIndex];
-            if (!item || !item.card || player.gold < item.card.cost) return;
+            if (!item || !item.card) return;
+
+            if (player.gold < item.card.cost) {
+                socket.emit('shop:buy:error', { message: 'ゴールドが足りません' });
+                return;
+            }
 
             player.gold -= item.card.cost;
             player.hand.push(item.card);
@@ -383,7 +395,12 @@ function registerSocketHandlers(io) {
             if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 2) return;
 
             const item = player.shop[shopIndex];
-            if (!item || !item.card || player.gold < item.card.cost) return;
+            if (!item || !item.card) return;
+
+            if (player.gold < item.card.cost) {
+                socket.emit('shop:buy:error', { message: 'ゴールドが足りません' });
+                return;
+            }
 
             player.gold -= item.card.cost;
             const boughtCard = item.card;
@@ -404,6 +421,10 @@ function registerSocketHandlers(io) {
 
         socket.on('shop:reroll', guard(() => {
             if (gameManager.gameState !== 'prep' || !player.isAlive) return;
+            if (player.gold < 2) {
+                socket.emit('shop:buy:error', { message: 'ゴールドが足りません' });
+                return;
+            }
             if (player.rerollShop(gameManager.round)) {
                 socket.emit('player:sync', {
                     gold: player.gold,
@@ -421,6 +442,7 @@ function registerSocketHandlers(io) {
             }
         }));
 
+        // 3: 解雇市場での購入価格計算の変更 (ショップ購入額 × ★ ÷ 2、端数切り捨て)
         socket.on('market:buy', guard(({ marketCardUid }) => {
             if (gameManager.gameState !== 'prep' || !player.isAlive || gameManager.round < 2) return;
             if (typeof marketCardUid !== 'string') return;
@@ -428,8 +450,14 @@ function registerSocketHandlers(io) {
             const item = gameManager.activeMarketCards.find(c => c.card && c.card.uid === marketCardUid);
             if (!item || item.sellerId === player.id || player.purchasedMarketUids.has(marketCardUid)) return;
 
-            const price = Math.floor(item.card.totalStats / 10);
-            if (player.gold < price) return;
+            const cost = RARITY_SETTINGS[item.card.rarity] ? RARITY_SETTINGS[item.card.rarity].cost : (item.card.cost || 2);
+            const stars = item.card.starCount || 1;
+            const price = Math.floor((cost * stars) / 2);
+
+            if (player.gold < price) {
+                socket.emit('market:buy:error', { message: 'ゴールドが足りません' });
+                return;
+            }
 
             player.gold -= price;
             player.purchasedMarketUids.add(marketCardUid);
@@ -449,6 +477,7 @@ function registerSocketHandlers(io) {
             syncMarketToAll();
         }));
 
+        // 3: 解雇市場での直接出撃購入価格計算の変更
         socket.on('market:buyAndDeploy', guard(({ marketCardUid, slotIndex }) => {
             if (gameManager.gameState !== 'prep' || !player.isAlive || gameManager.round < 2) return;
             if (typeof marketCardUid !== 'string') return;
@@ -457,8 +486,14 @@ function registerSocketHandlers(io) {
             const item = gameManager.activeMarketCards.find(c => c.card && c.card.uid === marketCardUid);
             if (!item || item.sellerId === player.id || player.purchasedMarketUids.has(marketCardUid)) return;
 
-            const price = Math.floor(item.card.totalStats / 10);
-            if (player.gold < price) return;
+            const cost = RARITY_SETTINGS[item.card.rarity] ? RARITY_SETTINGS[item.card.rarity].cost : (item.card.cost || 2);
+            const stars = item.card.starCount || 1;
+            const price = Math.floor((cost * stars) / 2);
+
+            if (player.gold < price) {
+                socket.emit('market:buy:error', { message: 'ゴールドが足りません' });
+                return;
+            }
 
             player.gold -= price;
             player.purchasedMarketUids.add(marketCardUid);
@@ -503,14 +538,23 @@ function registerSocketHandlers(io) {
                 if (!item || !item.card) return;
                 matCard = item.card;
                 cost = matCard.cost;
-                if (player.gold < cost) return;
+                if (player.gold < cost) {
+                    socket.emit('shop:buy:error', { message: 'ゴールドが足りません' });
+                    return;
+                }
             } else if (source.type === 'market') {
                 if (typeof source.marketCardUid !== 'string') return;
                 const item = gameManager.activeMarketCards.find(c => c.card && c.card.uid === source.marketCardUid);
                 if (!item || item.sellerId === player.id || player.purchasedMarketUids.has(source.marketCardUid)) return;
                 matCard = item.card;
-                cost = Math.floor(matCard.totalStats / 10);
-                if (player.gold < cost) return;
+                // 3: 市場素材カードの購入コスト計算
+                const mCost = RARITY_SETTINGS[matCard.rarity] ? RARITY_SETTINGS[matCard.rarity].cost : (matCard.cost || 2);
+                const mStars = matCard.starCount || 1;
+                cost = Math.floor((mCost * mStars) / 2);
+                if (player.gold < cost) {
+                    socket.emit('market:buy:error', { message: 'ゴールドが足りません' });
+                    return;
+                }
             }
 
             if (!matCard) return;
@@ -575,8 +619,8 @@ function registerSocketHandlers(io) {
             player.sortHand();
 
             const discardCard = JSON.parse(JSON.stringify(card));
-            // N-L1: 売却カードから配布フラグを除去
             if (discardCard.isNewDistributed) delete discardCard.isNewDistributed;
+            discardCard.sellerName = player.name;
 
             gameManager.pendingDiscards.push({
                 card: discardCard,
@@ -609,14 +653,15 @@ function registerSocketHandlers(io) {
             }
         }));
 
-        // N-H1: 同時全滅（生存者0）時でも戦闘参加者全員の「次へ」を正常受付し決着へ導く
         socket.on('battle:next', guard(() => {
             if (gameManager.gameState !== 'battle') return;
 
             if (gameManager.gameOverDecided) {
-                // 勝敗決着済みの場合は、脱落者も含め当該バトルの参加者ならゲーム終了処理へ進める
                 if (gameManager.battleParticipants.has(player.id)) {
-                    endGameCompletely();
+                    player.hasClickedNext = true;
+                    player.isReady = true;
+                    broadcastGameState();
+                    checkEndBattlePhase();
                 }
                 return;
             }
@@ -630,6 +675,9 @@ function registerSocketHandlers(io) {
 
         socket.on('spectate:getBattle', guard(({ targetPlayerId }) => {
             if (typeof targetPlayerId !== 'string') return;
+            if (!player.isEntered) return;
+            if (player.isAlive && !player.hasClickedNext) return;
+
             if (gameManager.allBattlesData[targetPlayerId]) {
                 const survivors = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
                 socket.emit('battle:start', {
@@ -645,7 +693,6 @@ function registerSocketHandlers(io) {
             endGameCompletely();
         }));
 
-        // N-H2: 試合中の遅れた再戦リクエストの混入を遮断 (ロビー時のみ受付)
         socket.on('lobby:rematch', guard(() => {
             if (gameManager.gameState !== 'lobby') return;
             player.life = 5;
@@ -663,7 +710,6 @@ function registerSocketHandlers(io) {
             broadcastGameState();
         }));
 
-        // N-H2: 試合中の遅れた退出リクエストの混入を遮断 (ロビー時のみ受付)
         socket.on('lobby:leave', guard(() => {
             if (gameManager.gameState !== 'lobby') return;
             player.isEntered = false;
@@ -681,42 +727,46 @@ function registerSocketHandlers(io) {
         }));
 
         socket.on('disconnect', () => {
-            gameManager.removePlayer(socket.id);
+            try {
+                gameManager.removePlayer(socket.id);
 
-            if (gameManager.gameState === 'prep') {
-                const activePlayers = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
-                Object.keys(gameManager.roundMatchups).forEach(pid => {
-                    const m = gameManager.roundMatchups[pid];
-                    if (m && (m.opponentId === socket.id || m.originalId === socket.id)) {
-                        let candidates = activePlayers.filter(p => p.id !== pid);
-                        if (candidates.length === 0 && gameManager.players[pid]) candidates = [gameManager.players[pid]];
-                        if (candidates.length > 0) {
-                            const ghostBase = candidates[Math.floor(Math.random() * candidates.length)];
-                            gameManager.roundMatchups[pid] = {
-                                opponentId: 'ghost_' + ghostBase.id,
-                                opponentName: ghostBase.name + ' (影)',
-                                isGhost: true,
-                                originalId: ghostBase.id
-                            };
-                            io.to(pid).emit('matchup:notice', {
-                                opponentName: gameManager.roundMatchups[pid].opponentName
-                            });
+                if (gameManager.gameState === 'prep') {
+                    const activePlayers = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
+                    Object.keys(gameManager.roundMatchups).forEach(pid => {
+                        const m = gameManager.roundMatchups[pid];
+                        if (m && (m.opponentId === socket.id || m.originalId === socket.id)) {
+                            let candidates = activePlayers.filter(p => p.id !== pid);
+                            if (candidates.length === 0 && gameManager.players[pid]) candidates = [gameManager.players[pid]];
+                            if (candidates.length > 0) {
+                                const ghostBase = candidates[Math.floor(Math.random() * candidates.length)];
+                                gameManager.roundMatchups[pid] = {
+                                    opponentId: 'ghost_' + ghostBase.id,
+                                    opponentName: ghostBase.name + ' (影)',
+                                    isGhost: true,
+                                    originalId: ghostBase.id
+                                };
+                                io.to(pid).emit('matchup:notice', {
+                                    opponentName: gameManager.roundMatchups[pid].opponentName
+                                });
+                            }
                         }
-                    }
-                });
-            }
-
-            checkImmediateWinnerOnDisconnect();
-            broadcastLobbyState();
-            broadcastGameState();
-
-            if (gameManager.gameState === 'prep') {
-                const active = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
-                if (active.length > 0 && active.every(p => p.isReady)) {
-                    startBattlePhase();
+                    });
                 }
-            } else if (gameManager.gameState === 'battle') {
-                checkEndBattlePhase();
+
+                checkImmediateWinnerOnDisconnect();
+                broadcastLobbyState();
+                broadcastGameState();
+
+                if (gameManager.gameState === 'prep') {
+                    const active = Object.values(gameManager.players).filter(p => p.isAlive && p.isEntered);
+                    if (active.length > 0 && active.every(p => p.isReady)) {
+                        startBattlePhase();
+                    }
+                } else if (gameManager.gameState === 'battle') {
+                    checkEndBattlePhase();
+                }
+            } catch (err) {
+                console.error('Error during player disconnect handling:', err);
             }
         });
     });

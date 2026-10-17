@@ -181,7 +181,7 @@ class GameManager {
         this.pendingDiscards = [];
         this.activeMarketCards = [];
         this.allBattlesData = {};
-        this.roundMatchups = {};
+        this.roundMatchups = {}; // #11: マッチング情報のクリア
         this.disconnectedPlayers = [];
         this.matchHistory = {};
         this.hostSocketId = null;
@@ -223,9 +223,10 @@ class GameManager {
         const target2 = originalGhostId || p2Id;
         this.matchHistory[p1Id].add(target2);
 
-        if (!originalGhostId && this.players[p2Id]) {
-            if (!this.matchHistory[p2Id]) this.matchHistory[p2Id] = new Set();
-            this.matchHistory[p2Id].add(p1Id);
+        // #16: 影戦の場合も相手(コピー元)の履歴に対称に記録
+        if (this.players[target2]) {
+            if (!this.matchHistory[target2]) this.matchHistory[target2] = new Set();
+            this.matchHistory[target2].add(p1Id);
         }
     }
 
@@ -236,6 +237,7 @@ class GameManager {
         this.activeMarketCards = [];
         this.disconnectedPlayers = [];
         this.matchHistory = {};
+        this.roundMatchups = {}; // #11: クリア
         this.gameOverDecided = false;
         this.battleParticipants.clear();
 
@@ -251,7 +253,6 @@ class GameManager {
             p.eliminatedRound = null;
             p.rank = null;
 
-            // N-M3: 前ゲームのショップロック・前ラウンド情報・市場購入履歴を完全初期化
             p.shop = [];
             p.lastRoundInfo = null;
             p.purchasedMarketUids.clear();
@@ -260,7 +261,6 @@ class GameManager {
 
             p.initRoundShop(1);
 
-            // 第1ラウンド配布カード (コモンのみ)
             const distCard = createRandomDistributedCard(1);
             distCard.isNewDistributed = true;
             p.hand.push(distCard);
@@ -318,8 +318,10 @@ class GameManager {
             p.hand = p.hand.filter(c => c.uid !== target.uid);
 
             const discardCard = JSON.parse(JSON.stringify(target));
-            // N-L1: 売却スナップショットから不要な配布フラグを確実に除去
             if (discardCard.isNewDistributed) delete discardCard.isNewDistributed;
+
+            // #7: 再売却時は今回の売却者を解雇者名として設定
+            discardCard.sellerName = p.name;
 
             this.pendingDiscards.push({
                 card: discardCard,

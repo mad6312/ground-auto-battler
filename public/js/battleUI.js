@@ -1,10 +1,32 @@
 /**
  * public/js/battleUI.js
- * バトル演出・アニメーション・リザルト描画モジュール (完全修正版)
+ * バトル演出・アニメーション・リザルト描画モジュール (要件改修版)
  */
 
 import { state, dom, socket, formatLife, renderCardDots, clearAllBattleTimers, escapeHtml } from './state.js';
 import { createCardElement } from './cardUI.js';
+
+// 3: バックグラウンドタブ監視用の30秒猶予タイマー
+let backgroundSkipTimer = null;
+
+function clearBackgroundSkipTimer() {
+    if (backgroundSkipTimer) {
+        clearTimeout(backgroundSkipTimer);
+        backgroundSkipTimer = null;
+    }
+}
+
+function startBackgroundSkipTimerIfNeeded() {
+    clearBackgroundSkipTimer();
+    // バトル画面が表示中かつタブが非表示の場合に30秒タイマーを開始
+    if (document.hidden && !dom.battleScreen.classList.contains('hidden') && state.battleAnimationTimer) {
+        backgroundSkipTimer = setTimeout(() => {
+            if (document.hidden && !dom.battleScreen.classList.contains('hidden') && state.battleAnimationTimer) {
+                skipBattle();
+            }
+        }, 30000); // 30秒の猶予
+    }
+}
 
 function safeTimeout(fn, ms) {
     const id = setTimeout(() => {
@@ -38,8 +60,36 @@ function updateCardSlotHp(cardSlotElement, newHp) {
     }
 }
 
+/**
+ * 1: バトルリザルト画面内の「戦闘ダメージ詳細」および「バトル経過ログ」の縦スクロール位置を初期位置 (0) にリセット
+ */
+export function resetResultModalScrollPositions() {
+    const selectors = [
+        '.result-damage-table-wrapper',
+        '#result-log-drawer',
+        '#result-log-list',
+        '.result-split-body',
+        '.result-damage-panel',
+        '.result-log-panel'
+    ];
+    selectors.forEach(sel => {
+        const el = dom.resultModal.querySelector(sel);
+        if (el) {
+            el.scrollTop = 0;
+            el.scrollLeft = 0;
+        }
+    });
+
+    const modalContent = dom.resultModal.querySelector('.modal-content');
+    if (modalContent) {
+        modalContent.scrollTop = 0;
+        modalContent.scrollLeft = 0;
+    }
+}
+
 export function startBattleAnimation(summary, logs, gameOverFlag) {
     clearAllBattleTimers();
+    clearBackgroundSkipTimer();
     cleanupCombatantVisuals();
 
     state.currentBattleData = { summary, logs };
@@ -77,12 +127,14 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
     function advanceStep() {
         if (!dom.gameOverModal.classList.contains('hidden') || !dom.resultModal.classList.contains('hidden')) {
             clearAllBattleTimers();
+            clearBackgroundSkipTimer();
             cleanupCombatantVisuals();
             return;
         }
 
         if (logIndex >= logs.length) {
             clearAllBattleTimers();
+            clearBackgroundSkipTimer();
             cleanupCombatantVisuals();
             safeTimeout(() => {
                 if (dom.gameOverModal.classList.contains('hidden')) {
@@ -116,7 +168,6 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
             logItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         });
 
-        // HP0消滅アニメーション
         if (log.faintedSide) {
             const isLeft = (log.faintedSide === 'p1' !== needSwap);
             const targetSide = isLeft ? dom.p1Combatant : dom.p2Combatant;
@@ -134,7 +185,6 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
             }, 440);
         }
 
-        // 次のカードの繰り出し
         if (log.deployedSide) {
             const isLeft = (log.deployedSide === 'p1' !== needSwap);
             const slot = isLeft ? dom.bP1CardSlot : dom.bP2CardSlot;
@@ -217,11 +267,26 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
 
     advanceStep();
     state.battleAnimationTimer = setInterval(advanceStep, 700);
+
+    // 3: バトル移行時にタブがバックグラウンドであれば30秒スキップタイマーを開始
+    startBackgroundSkipTimerIfNeeded();
 }
+
+// 3: バックグラウンド状態の変化検知（30秒以内に戻ればタイマー解除し通常演出を継続）
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        // フォアグラウンドに復帰したため30秒タイマーを解除
+        clearBackgroundSkipTimer();
+    } else {
+        // バックグラウンドになったため30秒タイマーを開始
+        startBackgroundSkipTimerIfNeeded();
+    }
+});
 
 export function skipBattle() {
     if (!state.currentBattleData) return;
     clearAllBattleTimers();
+    clearBackgroundSkipTimer();
     cleanupCombatantVisuals();
 
     dom.battleLogList.innerHTML = '';
@@ -258,6 +323,9 @@ export function skipBattle() {
 export function showBattleResult(summary) {
     if (!dom.gameOverModal.classList.contains('hidden')) return;
 
+    // 1: リザルト画面表示直前に全スクロールバーを初期位置 (0) にリセット
+    resetResultModalScrollPositions();
+
     dom.battleScreen.classList.add('hidden');
     dom.resultModal.classList.remove('hidden');
 
@@ -287,7 +355,7 @@ export function showBattleResult(summary) {
         } else if (isDraw) {
             dom.resultTitle.textContent = '⚔ 引き分け';
             dom.resultTitle.style.color = 'var(--warning-color)';
-            dom.resultSummaryText.textContent = `${opponentName} との対戦は引き分けでした。`;
+            dom.resultSummaryText.textContent = `${opponentName} との対戦は引き分けでした。（両者ライフ -1）`;
         } else {
             dom.resultTitle.textContent = '💀 バトル敗北…';
             dom.resultTitle.style.color = 'var(--danger-color)';
@@ -374,15 +442,21 @@ export function showBattleResult(summary) {
 
 export function showGameOver(rankings) {
     clearAllBattleTimers();
+    clearBackgroundSkipTimer();
     cleanupCombatantVisuals();
 
     dom.battleScreen.classList.add('hidden');
     dom.resultModal.classList.add('hidden');
     dom.waitAnnouncementBanner.classList.add('hidden');
+
+    dom.modalOverhand.classList.add('hidden');
+    dom.modalConfirm.classList.add('hidden');
+    dom.modalHistory.classList.add('hidden');
+    dom.modalSettings.classList.add('hidden');
+
     dom.gameOverModal.classList.remove('hidden');
 
-    // N-M7: 同時優勝時に全員の名前をVICTORYボックスに連名表示
-    const winners = rankings.filter(r => r.rank === 1);
+    const winners = rankings.filter(r => r.rank === 1 && !r.isNoWinner);
     if (winners.length > 0) {
         dom.winnerCelebration.classList.remove('hidden');
         dom.winnerNameDisplay.textContent = winners.map(w => w.name).join(' & ');
@@ -397,6 +471,12 @@ export function showGameOver(rankings) {
         if (r.isDisconnected) {
             row.innerHTML = `
         <td class="rank-dc">切断</td>
+        <td>${escapeHtml(r.name)}</td>
+        <td>-</td>
+      `;
+        } else if (r.isNoWinner) {
+            row.innerHTML = `
+        <td class="rank-other">-</td>
         <td>${escapeHtml(r.name)}</td>
         <td>-</td>
       `;

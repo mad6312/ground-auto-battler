@@ -13,7 +13,7 @@ export const state = {
     isHost: false,
 
     localHand: [],
-    localDeploySlots: [null, null, null], // H1: 長さ3固定
+    localDeploySlots: [null, null, null],
     localShop: [],
     localMarket: [],
 
@@ -30,13 +30,9 @@ export const state = {
         offsetY: 0
     },
 
-    // M7: ドラッグ中の再描画によるゴースト残存防止用バッファ
     pendingMarketSync: null,
-
-    // 手札へのドロップ時のアニメーション用座標待機バッファ
     pendingHandDropAnim: null,
 
-    // バトルタイマーの完全破棄管理
     battleAnimationTimer: null,
     battleTimeoutIds: [],
 
@@ -57,7 +53,34 @@ export function clearAllBattleTimers() {
     state.battleTimeoutIds = [];
 }
 
-// M10: プレイヤー名のHTML混入・XSS対策エスケープ関数
+// #1, #2, #14: クライアント側ゲーム状態および開いているモーダルの一括リセット
+export function resetClientGameState() {
+    clearAllBattleTimers();
+
+    state.localHand = [];
+    state.localDeploySlots = [null, null, null];
+    state.localShop = [];
+    state.localMarket = [];
+
+    state.reservedSpectateTargetId = null;
+    state.activeSpectatingId = null;
+    state.pendingMarketSync = null;
+    state.pendingHandDropAnim = null;
+    state.currentBattleData = null;
+    state.isGameOverDecided = false;
+    state.pendingReadyAfterDiscard = false;
+
+    // モーダルの完全非表示
+    dom.modalOverhand.classList.add('hidden');
+    dom.modalConfirm.classList.add('hidden');
+    dom.modalHistory.classList.add('hidden');
+    dom.modalSettings.classList.add('hidden');
+    dom.battleScreen.classList.add('hidden');
+    dom.resultModal.classList.add('hidden');
+    dom.waitAnnouncementBanner.classList.add('hidden');
+}
+
+// プレイヤー名エスケープ関数
 export function escapeHtml(str) {
     if (!str || typeof str !== 'string') return '';
     return str
@@ -66,6 +89,22 @@ export function escapeHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+// #18-8: トーストメッセージ表示
+export function showToast(msg) {
+    let toast = document.getElementById('game-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'game-toast';
+        toast.className = 'game-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.classList.add('show');
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, 2000);
 }
 
 // ============================

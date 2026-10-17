@@ -1,6 +1,6 @@
 /**
  * src/server/battleEngine.js
- * 戦闘計算・マッチング・シミュレーションモジュール (要件改修版)
+ * 戦闘計算・マッチング・シミュレーションモジュール (完全修正版)
  */
 
 const {
@@ -79,7 +79,6 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
     }
 
     const logs = [];
-    // 8: 交戦した全カード組み合わせ履歴 (順序維持)
     const combatPairRecords = [];
 
     const p1TotalCount = p1CombatTeam.length;
@@ -127,7 +126,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
     }
 
     let turnCount = 0;
-    const maxTurns = 300;
+    const maxTurns = 300; // #18-6: 最大300ターン上限
 
     let active1 = p1CombatTeam[p1Index];
     let active2 = p2CombatTeam[p2Index];
@@ -141,13 +140,12 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
 
     let nextAttacker = null;
 
-    // 現在対面しているペアの記録ポインタ
     let currentPair = {
         p1Card: JSON.parse(JSON.stringify(active1)),
         p2Card: JSON.parse(JSON.stringify(active2)),
         damageP1toP2: 0,
         damageP2toP1: 0,
-        faintedSide: null // 'p1' | 'p2' | null
+        faintedSide: null
     };
     combatPairRecords.push(currentPair);
 
@@ -156,7 +154,6 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         active1 = p1CombatTeam[p1Index];
         active2 = p2CombatTeam[p2Index];
 
-        // ペアが変わったかチェック
         if (currentPair.p1Card.uid !== active1.uid || currentPair.p2Card.uid !== active2.uid) {
             currentPair = {
                 p1Card: JSON.parse(JSON.stringify(active1)),
@@ -213,7 +210,6 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             }
         }
 
-        // 7: HPを差し引く
         defCard.hp = Math.max(0, defCard.hp - finalDmg);
 
         let logMsg = `${atkPlayer.name}の『${atkCard.name}』の攻撃！ `;
@@ -235,7 +231,6 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             isCrit,
             attrMult,
             counts: getCountsMeta(),
-            // 7: リアルタイム残HP同期用
             state: {
                 p1Card: JSON.parse(JSON.stringify(active1)),
                 p2Card: JSON.parse(JSON.stringify(active2))
@@ -295,6 +290,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
     const p1Survives = p1Index < p1CombatTeam.length;
     const p2Survives = p2Index < p2CombatTeam.length;
 
+    // #18-7: 引き分け時は両者敗北扱い (loserIds に両者を含めライフ-1)
     if (!p1Survives && !p2Survives) {
         logs.push({ text: '両者のカードが全滅しました。引き分け！', damage: 0, counts: getCountsMeta() });
         loserIds.push(p1.id);
@@ -310,6 +306,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         winnerName = p1.name;
         if (!isP2Ghost) loserIds.push(p2.id);
     } else {
+        // #18-6: 300ターン上限到達時の残存数・HP比率による公平判定
         const p1RemCards = p1CombatTeam.length - p1Index;
         const p2RemCards = p2CombatTeam.length - p2Index;
         let p1TotalRemHp = p1CombatTeam.slice(p1Index).reduce((sum, c) => sum + c.hp, 0);
@@ -326,6 +323,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             winnerName = p2.name;
             loserIds.push(p1.id);
         } else {
+            // #18-7: 完全同等による引き分け
             logs.push({ text: `規定ターン終了！ 残存数・HP同等により引き分け！`, damage: 0, counts: getCountsMeta() });
             loserIds.push(p1.id);
             if (!isP2Ghost) loserIds.push(p2.id);
@@ -342,15 +340,22 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
 }
 
 /**
- * 過去の対戦履歴を考慮したマッチング作成
+ * #16: Fisher-Yates シャッフルおよび再戦回数最小化マッチング
  */
 function createRoundMatchups(activePlayers, matchHistory = {}) {
     const matchups = {};
     if (activePlayers.length === 0) return matchups;
 
-    let pool = [...activePlayers].sort(() => Math.random() - 0.5);
+    // Fisher-Yates で偏りなくシャッフル
+    let pool = [...activePlayers];
+    for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+
     const matchedIds = new Set();
 
+    // 1対1ペアの選定（未対戦相手を最優先）
     for (let i = 0; i < pool.length; i++) {
         const p1 = pool[i];
         if (matchedIds.has(p1.id)) continue;
@@ -358,6 +363,7 @@ function createRoundMatchups(activePlayers, matchHistory = {}) {
         const history = matchHistory[p1.id] || new Set();
 
         let opponent = null;
+        // 未対戦の相手を探す
         for (let j = i + 1; j < pool.length; j++) {
             const p2 = pool[j];
             if (!matchedIds.has(p2.id) && !history.has(p2.id)) {
@@ -366,6 +372,7 @@ function createRoundMatchups(activePlayers, matchHistory = {}) {
             }
         }
 
+        // 未対戦がいない場合、任意の相手とペア
         if (!opponent) {
             for (let j = i + 1; j < pool.length; j++) {
                 const p2 = pool[j];
@@ -382,9 +389,11 @@ function createRoundMatchups(activePlayers, matchHistory = {}) {
             matchedIds.add(p1.id);
             matchedIds.add(opponent.id);
         } else {
+            // 奇数番目で相手が余った場合は影（ゴースト）を割り当て
             let candidates = activePlayers.filter(p => p.id !== p1.id);
             if (candidates.length === 0) candidates = [p1];
 
+            // 影の選定でも未対戦相手を優先
             let unplayedCandidates = candidates.filter(c => !history.has(c.id));
             let chosenCandidate = unplayedCandidates.length > 0
                 ? unplayedCandidates[Math.floor(Math.random() * unplayedCandidates.length)]

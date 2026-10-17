@@ -1,9 +1,9 @@
 /**
  * cardsData.js
- * 全180種類のカードマスターデータ、属性相性、種族ボーナス、出現率・スタッツ生成定義 (要件改修版)
+ * 全180種類のカードマスターデータ、属性相性、種族ボーナス、出現率・スタッツ生成定義 (完全修正版)
  */
 
-// 4: レアリティ設定 (各スタッツの最低値 minStat を設定)
+// レアリティ設定 (各スタッツの最低値 minStat)
 const RARITY_SETTINGS = {
   common: { name: 'コモン', statsTotal: 10, cost: 2, minStat: 1, color: '#94a3b8' },
   uncommon: { name: 'アンコモン', statsTotal: 20, cost: 4, minStat: 2, color: '#22c55e' },
@@ -12,7 +12,7 @@ const RARITY_SETTINGS = {
   legend: { name: 'レジェンド', statsTotal: 50, cost: 10, minStat: 5, color: '#facc15' }
 };
 
-// 5: ラウンド別レアリティ出現率テーブル
+// ラウンド別レアリティ出現率テーブル
 const RARITY_RATES_BY_ROUND = {
   early: { // ラウンド1～4
     common: 0.45,
@@ -122,7 +122,8 @@ const CARD_MASTER = [
   { id: 'ice_elf_5', element: '氷', tribe: 'エルフ', rarity: 'legend', name: '氷雪の絶対女王・クリスタリア (Crystalia, Absolute Ice Queen)' },
   { id: 'ice_orc_1', element: '氷', tribe: 'オーク', rarity: 'common', name: '凍えた襲撃者 (Freezing Raider)' },
   { id: 'ice_orc_2', element: '氷', tribe: 'オーク', rarity: 'uncommon', name: '氷原の蛮族 (Tundra Barbarian)' },
-  { id: 'ice_orc_3', element: '氷', tribe: 'オーク', rarity: 'rare', name: '凍土の砕砕槌 (Glacier-Smasher)' },
+  // #18-9: 誤字修正
+  { id: 'ice_orc_3', element: '氷', tribe: 'オーク', rarity: 'rare', name: '凍土の砕石槌 (Glacier-Smasher)' },
   { id: 'ice_orc_4', element: '氷', tribe: 'オーク', rarity: 'epic', name: '氷結の狂乱者 (Frost-Frenzy Behemoth)' },
   { id: 'ice_orc_5', element: '氷', tribe: 'オーク', rarity: 'legend', name: '吹雪を喚ぶ覇王・フロストボーン (Frostborn, Blizzard Chieftain)' },
   { id: 'ice_vampire_1', element: '氷', tribe: 'ヴァンパイア', rarity: 'common', name: '蒼血の従者 (Cold-Blood Thrall)' },
@@ -198,7 +199,8 @@ const CARD_MASTER = [
   { id: 'thunder_lizard_2', element: '雷', tribe: 'リザードマン', rarity: 'uncommon', name: '雷槍の守護兵 (Volt-Spear Guard)' },
   { id: 'thunder_lizard_3', element: '雷', tribe: 'リザードマン', rarity: 'rare', name: '紫電の呪術師 (Arc Shaman)' },
   { id: 'thunder_lizard_4', element: '雷', tribe: 'リザードマン', rarity: 'epic', name: '轟雷の龍鱗将軍 (Thunder-Scale General)' },
-  { id: 'thunder_lizard_5', element: '雷', tribe: 'リザードマン', rarity: 'legend', name: '迅雷の雷神竜人・インドラ (Indra, 雷神竜)' },
+  // #18-9: 英語名修正
+  { id: 'thunder_lizard_5', element: '雷', tribe: 'リザードマン', rarity: 'legend', name: '迅雷の雷神竜人・インドラ (Indra, the Thunderclap Dragonkin)' },
 
   // ===================== 5. 水属性 (Water) =====================
   { id: 'water_dragon_1', element: '水', tribe: 'ドラゴン', rarity: 'common', name: '水棲の小竜 (Aquatic Hatchling)' },
@@ -262,7 +264,8 @@ const CARD_MASTER = [
   { id: 'earth_lizard_2', element: '地', tribe: 'リザードマン', rarity: 'uncommon', name: '硬鱗の防衛兵 (Hard-Scale Defender)' },
   { id: 'earth_lizard_3', element: '地', tribe: 'リザードマン', rarity: 'rare', name: '岩石の重槌士 (Rock-Mace Vanguard)' },
   { id: 'earth_lizard_4', element: '地', tribe: 'リザードマン', rarity: 'epic', name: '砂漠の大首長 (Grand Chieftain of the Dunes)' },
-  { id: 'earth_lizard_5', element: '地', tribe: 'リザードマン', rarity: 'legend', name: '大地を統べる怪神・ゴジラ王 (King Gojiras, Earth God)' }
+  // #18-9: 既存IP類似回避のための名称変更
+  { id: 'earth_lizard_5', element: '地', tribe: 'リザードマン', rarity: 'legend', name: '大地の蜥蜴王ガイア・ゾルダ (Gaia Zolda, the Earthscale Sovereign)' }
 ];
 
 /**
@@ -274,7 +277,6 @@ function generateRandomStats(total, minStat = 1) {
     return { hp: minStat, atk: minStat, spd: minStat };
   }
 
-  // 剰余(surplus)を非負整数3つにスターズ＆バー方式でランダム配分
   let c1 = Math.floor(Math.random() * (surplus + 2));
   let c2 = Math.floor(Math.random() * (surplus + 1));
   if (c2 >= c1) c2++;
@@ -288,7 +290,6 @@ function generateRandomStats(total, minStat = 1) {
 
   const parts = [p1, p2, p3];
 
-  // Fisher-Yates シャッフル
   for (let i = parts.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [parts[i], parts[j]] = [parts[j], parts[i]];
@@ -343,8 +344,6 @@ function createRandomShopCard(round = 1) {
 
 /**
  * 5: ラウンド開始時配布カード生成
- * 解放条件 (R1:コモンのみ, R2:アンコモン解放, R3:レア解放, R4:エピック解放, R5+:レジェンド解放) を厳格に維持し、
- * 解放済みのレアリティについてラウンド別出現率の比率で抽選
  */
 function createRandomDistributedCard(round) {
   const rates = getRarityRatesForRound(round);

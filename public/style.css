@@ -1,5 +1,5 @@
 /* ============================================================
-   グラウンド・オートバトラー スタイルシート (UI改修版)
+   グラウンド・オートバトラー スタイルシート (要件改修版)
    ============================================================ */
 
 :root {
@@ -151,6 +151,30 @@ body {
         transform: scale(0.9) translateY(-20px);
         opacity: 0;
     }
+}
+
+/* ================= トースト通知 ================= */
+.game-toast {
+    position: fixed;
+    top: 68px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-20px);
+    background: rgba(239, 68, 68, 0.92);
+    color: #ffffff;
+    padding: 8px 24px;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    font-weight: bold;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+    z-index: 10001;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.game-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
 }
 
 /* ================= ヘッダー ================= */
@@ -623,8 +647,9 @@ body {
 }
 
 .slot-dropzone.drag-over {
-    border-color: var(--accent-color);
-    background: rgba(59, 130, 246, 0.15);
+    border-color: var(--accent-color) !important;
+    background: rgba(59, 130, 246, 0.2) !important;
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
 }
 
 /* 自陣エリア */
@@ -682,11 +707,13 @@ body {
     font-size: 0.85rem;
     font-weight: bold;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: all 0.2s;
 }
 
 .discard-box.drag-over {
-    background: rgba(239, 68, 68, 0.3);
+    background: rgba(239, 68, 68, 0.35) !important;
+    border-color: #ff8888 !important;
+    box-shadow: 0 0 14px rgba(239, 68, 68, 0.6);
 }
 
 .hand-wrapper {
@@ -764,7 +791,6 @@ body {
     box-shadow: 0 0 12px rgba(250, 204, 21, 0.5);
 }
 
-/* 1: 先にHPが0になったカードの遺影風視覚表現 (属性バッジを覆い隠す要素を完全撤廃し、属性バッジの視認性を確保) */
 .card-item.card-portrait-memorial {
     filter: grayscale(100%) contrast(1.25) brightness(0.78) !important;
     border-color: #020617 !important;
@@ -1018,6 +1044,13 @@ body {
 
 .card-synth-success {
     animation: synthSuccessPop 0.6s ease-out;
+}
+
+/* 2: 合成アニメーション再生中にカード強調アニメーションが重なっても互いに干渉・中断せず共存 */
+.card-item.card-synth-highlight.card-synth-success {
+    animation: synthSuccessPop 0.6s ease-out, pulseSynth 1.2s infinite ease-in-out !important;
+    border-color: #38bdf8 !important;
+    z-index: 25;
 }
 
 /* ================= バトル画面 ================= */
@@ -1649,7 +1682,7 @@ body {
     border: 1px solid rgba(248, 113, 113, 0.4);
 }
 
-/* モーダル汎用 */
+/* ================= モーダル汎用 ================= */
 .modal-overlay {
     position: fixed;
     inset: 0;
@@ -1658,6 +1691,10 @@ body {
     align-items: center;
     justify-content: center;
     z-index: 1000;
+}
+
+#game-over-modal {
+    z-index: 1500 !important;
 }
 
 .modal-content {
