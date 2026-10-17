@@ -1,6 +1,6 @@
 /**
  * public/js/cardUI.js
- * カードUIコンポーネント生成および表示制御モジュール (要件改修版)
+ * カードUIコンポーネント生成および表示制御モジュール (完全改修版)
  */
 
 import { state, dom, socket, escapeHtml } from './state.js';
@@ -25,6 +25,16 @@ const TRIBE_BONUSES = {
 const RARITY_ORDER = { common: 1, uncommon: 2, rare: 3, epic: 4, legend: 5 };
 const TRIBE_ORDER = { 'ドワーフ': 1, 'ドラゴン': 2, 'エルフ': 3, 'オーク': 4, 'ヴァンパイア': 5, 'リザードマン': 6 };
 const ELEMENT_ORDER = { '火': 1, '氷': 2, '風': 3, '雷': 4, '水': 5, '地': 6 };
+
+// 飛翔移動中のカードUIDを追跡管理するSet
+const activeFlightUids = new Set();
+
+// 現在マウスホバーまたはドラッグされているカード情報（移動中のカード判定にも動的連動）
+let currentHoveredCard = null;
+let currentHoveredArea = null;
+
+// タッチ長押しタイマーが発火したタイムスタンプ（タッチ端末特有の二重発火防止専用）
+let lastTouchLongTapTimestamp = 0;
 
 export function sortHandCards(cards) {
     return [...cards].sort((a, b) => {
@@ -90,9 +100,8 @@ export function getBuffedStats(card, shouldBuff = false) {
 }
 
 /**
- * 要件1: 同レアリティ・同種族カードの強調アニメーション適用範囲
- * 対象: 手札UI, ショップ陳列, 解雇市場陳列, 繰り出しUI(出撃スロット)
- * 対象外: 前ラウンド情報モーダル, バトルリザルト画面, Tips等のカードUI
+ * 同レアリティ・同種族カードの強調アニメーション適用
+ * 移動中のカード (.floating-flight-card) も通常カードと全く同一ルールで走査対象に含める
  */
 export function highlightSynthesizableCards(sourceCard, sourceArea) {
     if (!sourceCard) return;
@@ -100,15 +109,21 @@ export function highlightSynthesizableCards(sourceCard, sourceArea) {
     if (!allowedAreas.includes(sourceArea)) return;
     if (!dom.modalOverhand.classList.contains('hidden')) return;
 
-    const validContainersSelector = '#player-hand .card-item, #shop-cards .card-item, #market-cards .card-item, .slots-container .card-item';
+    // 移動中のカード (.floating-flight-card) も対象に含める
+    const validContainersSelector = '#player-hand .card-item, #shop-cards .card-item, #market-cards .card-item, .slots-container .card-item, .floating-flight-card';
     const targetCardElements = document.querySelectorAll(validContainersSelector);
 
     targetCardElements.forEach(el => {
         const cardData = el.__cardData;
+        // ホバーされているカード自身ではなく、かつ同レアリティ・同種族であるカードのみを強調
         if (cardData && cardData.uid !== sourceCard.uid) {
             if (cardData.rarity === sourceCard.rarity && cardData.tribe === sourceCard.tribe) {
                 el.classList.add('card-synth-highlight');
+            } else {
+                el.classList.remove('card-synth-highlight');
             }
+        } else {
+            el.classList.remove('card-synth-highlight');
         }
     });
 }
@@ -119,15 +134,39 @@ export function clearSynthesizableHighlights() {
     });
 }
 
-export function animateCardFlight(startRect, targetElement, onComplete) {
+/**
+ * カードの飛翔アニメーション
+ * 移動中のカード自身に不当な強制発光は行わず、マウスオーバー状態に完全連動
+ */
+export function animateCardFlight(startRect, targetElement, card = null, onComplete = null) {
     if (!startRect || !targetElement) {
         if (onComplete) onComplete();
         return;
     }
 
+    const cardUid = card ? card.uid : null;
+
+    if (cardUid) {
+        activeFlightUids.add(cardUid);
+    }
+
     const endRect = targetElement.getBoundingClientRect();
     const ghost = targetElement.cloneNode(true);
     ghost.classList.add('floating-flight-card');
+    ghost.classList.remove('card-synth-highlight'); // 初期状態では無条件発光させない
+
+    // 移動中のゴースト要素にカードデータを紐付け、強調判定の走査対象とする
+    if (card) {
+        ghost.__cardData = card;
+    }
+
+    // 移動開始時点で別のカードがすでにホバー/ドラッグ中であれば、そのカードの条件に基づき強調判定
+    if (currentHoveredCard && currentHoveredArea) {
+        if (card && card.uid !== currentHoveredCard.uid &&
+            card.rarity === currentHoveredCard.rarity && card.tribe === currentHoveredCard.tribe) {
+            ghost.classList.add('card-synth-highlight');
+        }
+    }
 
     ghost.style.left = `${startRect.left}px`;
     ghost.style.top = `${startRect.top}px`;
@@ -148,7 +187,21 @@ export function animateCardFlight(startRect, targetElement, onComplete) {
     const cleanup = () => {
         if (hasCleanedUp) return;
         hasCleanedUp = true;
-        targetElement.style.opacity = '1';
+
+        if (cardUid) {
+            activeFlightUids.delete(cardUid);
+            const currentTarget = document.querySelector(`[data-card-uid="${cardUid}"]`);
+            if (currentTarget) {
+                currentTarget.style.opacity = '1';
+                // 着地後、現在ホバー中のカードがあれば強調状態を再反映
+                if (currentHoveredCard && currentHoveredArea) {
+                    highlightSynthesizableCards(currentHoveredCard, currentHoveredArea);
+                }
+            }
+        } else {
+            targetElement.style.opacity = '1';
+        }
+
         if (ghost.parentNode) ghost.remove();
         if (onComplete) onComplete();
     };
@@ -193,6 +246,9 @@ const endCurrentDrag = (e, isSuccess) => {
     if (!activeDragSession) return;
     const s = activeDragSession;
     activeDragSession = null;
+
+    currentHoveredCard = null;
+    currentHoveredArea = null;
 
     updateDropzoneHighlight(null);
 
@@ -253,6 +309,10 @@ window.addEventListener('pointermove', (e) => {
         };
 
         s.sourceElement.style.opacity = '0.35';
+
+        // ドラッグ中のカードをホバー対象として登録し強調
+        currentHoveredCard = s.card;
+        currentHoveredArea = s.dragInfo.type;
         highlightSynthesizableCards(s.card, s.dragInfo.type);
     }
 
@@ -275,8 +335,6 @@ window.addEventListener('blur', () => {
     }
 });
 
-let lastTouchLongTapTimestamp = 0;
-
 function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
     let longTapTimer = null;
 
@@ -288,8 +346,13 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
     };
 
     cardElement.addEventListener('pointerdown', (e) => {
+        if (e.isPrimary === false) return;
         if (e.button !== 0) return;
         if (cardElement.dataset.nonDraggable === 'true') return;
+
+        if (activeDragSession) {
+            endCurrentDrag(e, false);
+        }
 
         clearTap();
 
@@ -299,7 +362,7 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
                 onContextMenu();
                 if (navigator.vibrate) navigator.vibrate(30);
                 longTapTimer = null;
-            }, 500);
+            }, 480);
         }
 
         activeDragSession = {
@@ -332,6 +395,10 @@ export function createCardElement(card, options = {}) {
     div.dataset.cardUid = card.uid;
     if (options.nonDraggable) div.dataset.nonDraggable = 'true';
     div.__cardData = card;
+
+    if (activeFlightUids.has(card.uid)) {
+        div.style.opacity = '0';
+    }
 
     let costHtml = '';
     if (options.isShop) {
@@ -405,11 +472,25 @@ export function createCardElement(card, options = {}) {
     }
 
     const sourceArea = options.dragInfo ? options.dragInfo.type : options.area;
+
+    // マウスホバー検知
     div.addEventListener('mouseenter', () => {
-        if (!state.pointerDrag.isDragging && sourceArea) highlightSynthesizableCards(card, sourceArea);
+        if (!state.pointerDrag.isDragging && sourceArea) {
+            currentHoveredCard = card;
+            currentHoveredArea = sourceArea;
+            highlightSynthesizableCards(card, sourceArea);
+        }
     });
+
+    // マウス離脱検知
     div.addEventListener('mouseleave', () => {
-        if (!state.pointerDrag.isDragging) clearSynthesizableHighlights();
+        if (!state.pointerDrag.isDragging) {
+            if (currentHoveredCard && currentHoveredCard.uid === card.uid) {
+                currentHoveredCard = null;
+                currentHoveredArea = null;
+            }
+            clearSynthesizableHighlights();
+        }
     });
 
     if (!options.nonDraggable && options.dragInfo) {
@@ -419,7 +500,7 @@ export function createCardElement(card, options = {}) {
     if (options.onContextMenu) {
         div.addEventListener('contextmenu', (e) => {
             e.preventDefault();
-            if (Date.now() - lastTouchLongTapTimestamp < 800) {
+            if (Date.now() - lastTouchLongTapTimestamp < 450) {
                 return;
             }
             options.onContextMenu();
@@ -520,18 +601,21 @@ export function renderHand(syncLineupCallback, options = {}) {
 
                 for (let i = 0; i < 3; i++) {
                     if (!state.localDeploySlots[i]) {
-                        // 要件1: カード移動に伴い強調アニメーションを確実にクリア
-                        clearSynthesizableHighlights();
-
                         const startRect = cardEl.getBoundingClientRect();
                         state.localDeploySlots[i] = card.uid;
+
+                        // 移動開始によりマウスオーバーが外れるためホバー状態と強調を一旦クリア
+                        currentHoveredCard = null;
+                        currentHoveredArea = null;
+                        clearSynthesizableHighlights();
+
                         renderHand(syncLineupCallback);
                         renderDeploySlots(syncLineupCallback);
                         if (syncLineupCallback) syncLineupCallback();
 
                         const targetZone = dom.deployDropzones[i].querySelector('.card-item');
                         if (targetZone) {
-                            animateCardFlight(startRect, targetZone);
+                            animateCardFlight(startRect, targetZone, card);
                         }
                         break;
                     }
@@ -554,18 +638,21 @@ export function renderDeploySlots(syncLineupCallback) {
                     area: 'deploy',
                     dragInfo: { type: 'deploy', slotIndex: index, uid: card.uid },
                     onContextMenu: () => {
-                        // 要件1: カード移動に伴い強調アニメーションを確実にクリア
-                        clearSynthesizableHighlights();
-
                         const startRect = cardEl.getBoundingClientRect();
                         state.localDeploySlots[index] = null;
+
+                        // 移動開始によりマウスオーバーが外れるためホバー状態と強調を一旦クリア
+                        currentHoveredCard = null;
+                        currentHoveredArea = null;
+                        clearSynthesizableHighlights();
+
                         renderHand(syncLineupCallback);
                         renderDeploySlots(syncLineupCallback);
                         if (syncLineupCallback) syncLineupCallback();
 
                         const targetEl = dom.playerHandContainer.querySelector(`[data-card-uid="${card.uid}"]`);
                         if (targetEl) {
-                            animateCardFlight(startRect, targetEl);
+                            animateCardFlight(startRect, targetEl, card);
                         }
                     }
                 });

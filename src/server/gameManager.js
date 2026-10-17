@@ -1,6 +1,6 @@
 /**
  * src/server/gameManager.js
- * プレイヤーおよび全体ゲーム状態の管理モジュール (完全修正版)
+ * プレイヤーおよび全体ゲーム状態の管理モジュール (完全改修版)
  */
 
 const crypto = require('crypto');
@@ -128,10 +128,11 @@ class Player {
     }
 
     rerollShop(round = 1) {
+        if (!this.shop || this.shop.length === 0) return false;
         if (this.gold < 2) return false;
         this.gold -= 2;
         for (let i = 0; i < 6; i++) {
-            if (!this.shop[i].locked) {
+            if (!this.shop[i] || !this.shop[i].locked) {
                 this.shop[i] = { card: createRandomShopCard(round), locked: false };
             }
         }
@@ -154,8 +155,9 @@ class GameManager {
         this.allBattlesData = {};
         this.roundMatchups = {};
         this.disconnectedPlayers = [];
-        this.matchHistory = {};
+        this.matchHistory = {}; // id -> { opponentId: count }
         this.gameOverDecided = false;
+        this.finalOutcome = null; // { type: 'winner'|'jointWinners'|'noWinner', id?, ids? }
         this.battleParticipants = new Set();
     }
 
@@ -163,7 +165,7 @@ class GameManager {
         const p = new Player(id, name);
         this.players[id] = p;
         if (!this.matchHistory[id]) {
-            this.matchHistory[id] = new Set();
+            this.matchHistory[id] = {};
         }
         this.updateHost();
         return p;
@@ -172,7 +174,12 @@ class GameManager {
     removePlayer(id) {
         const p = this.players[id];
         if (p && this.gameState !== 'lobby' && p.isEntered) {
-            this.disconnectedPlayers.push({ name: p.name });
+            this.disconnectedPlayers.push({
+                id: p.id,
+                name: p.name,
+                wasAlive: p.isAlive,
+                eliminatedRound: p.eliminatedRound || this.round
+            });
         }
         delete this.players[id];
         delete this.matchHistory[id];
@@ -195,6 +202,7 @@ class GameManager {
         this.matchHistory = {};
         this.hostSocketId = null;
         this.gameOverDecided = false;
+        this.finalOutcome = null;
         this.battleParticipants.clear();
     }
 
@@ -206,7 +214,10 @@ class GameManager {
         const ids = Object.keys(this.players);
         if (ids.length === 0) {
             this.hostSocketId = null;
-        } else if (!this.hostSocketId || !this.players[this.hostSocketId]) {
+            return;
+        }
+        // ホスト未設定、または現在のホストが切断済みの場合、先頭の残存プレイヤーへ委譲
+        if (!this.hostSocketId || !this.players[this.hostSocketId]) {
             this.hostSocketId = ids[0];
         }
     }
@@ -228,17 +239,17 @@ class GameManager {
     }
 
     recordMatch(p1Id, p2Id, originalGhostId = null) {
-        if (!this.matchHistory[p1Id]) this.matchHistory[p1Id] = new Set();
+        if (!this.matchHistory[p1Id]) this.matchHistory[p1Id] = {};
         const target2 = originalGhostId || p2Id;
-        this.matchHistory[p1Id].add(target2);
+
+        this.matchHistory[p1Id][target2] = (this.matchHistory[p1Id][target2] || 0) + 1;
 
         if (this.players[target2]) {
-            if (!this.matchHistory[target2]) this.matchHistory[target2] = new Set();
-            this.matchHistory[target2].add(p1Id);
+            if (!this.matchHistory[target2]) this.matchHistory[target2] = {};
+            this.matchHistory[target2][p1Id] = (this.matchHistory[target2][p1Id] || 0) + 1;
         }
     }
 
-    // 要件2: 2試合目開始時の完全初期化
     resetGameForStart() {
         this.gameState = 'prep';
         this.round = 1;
@@ -248,6 +259,7 @@ class GameManager {
         this.matchHistory = {};
         this.roundMatchups = {};
         this.gameOverDecided = false;
+        this.finalOutcome = null;
         this.battleParticipants.clear();
 
         const entered = Object.values(this.players).filter(p => p.isEntered);
@@ -266,7 +278,7 @@ class GameManager {
             p.lastRoundInfo = null;
             p.purchasedMarketUids.clear();
 
-            this.matchHistory[p.id] = new Set();
+            this.matchHistory[p.id] = {};
 
             p.initRoundShop(1);
 
@@ -283,6 +295,7 @@ class GameManager {
         this.activeMarketCards = [...this.pendingDiscards];
         this.pendingDiscards = [];
         this.gameOverDecided = false;
+        this.finalOutcome = null;
         this.battleParticipants.clear();
 
         const goldBonus = this.round >= 5 ? 15 : 10;

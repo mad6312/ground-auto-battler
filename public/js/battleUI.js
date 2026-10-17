@@ -1,6 +1,6 @@
 /**
  * public/js/battleUI.js
- * バトル演出・アニメーション・リザルト描画モジュール (要件改修版)
+ * バトル演出・アニメーション・リザルト描画モジュール (完全改修版)
  */
 
 import { state, dom, socket, formatLife, renderCardDots, clearAllBattleTimers, escapeHtml } from './state.js';
@@ -87,6 +87,10 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
     clearBackgroundSkipTimer();
     cleanupCombatantVisuals();
 
+    // H-4: 新しいバトルが始まった証拠なので、前試合の終了画面・フラグを確実にクリア
+    state.isGameOverShown = false;
+    dom.gameOverModal.classList.add('hidden');
+
     state.currentBattleData = { summary, logs };
     state.isGameOverDecided = !!gameOverFlag;
 
@@ -120,7 +124,8 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
     let logIndex = 0;
 
     function advanceStep() {
-        if (!dom.gameOverModal.classList.contains('hidden') || !dom.resultModal.classList.contains('hidden')) {
+        // H-4: 明示的フラグで演出中断を安全判定
+        if (state.isGameOverShown || !dom.resultModal.classList.contains('hidden')) {
             clearAllBattleTimers();
             clearBackgroundSkipTimer();
             cleanupCombatantVisuals();
@@ -133,7 +138,7 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
             clearBackgroundSkipTimer();
             cleanupCombatantVisuals();
             safeTimeout(() => {
-                if (dom.gameOverModal.classList.contains('hidden')) {
+                if (!state.isGameOverShown) {
                     showBattleResult(summary);
                 }
             }, 1400);
@@ -236,7 +241,6 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
             }, 200);
         }
 
-        // 要件2: 片方のみカードが存在する場合でも確実にスロットへ描画
         if (log.state && !log.faintedSide && !log.deployedSide) {
             const leftCard = needSwap ? log.state.p2Card : log.state.p1Card;
             const rightCard = needSwap ? log.state.p1Card : log.state.p2Card;
@@ -308,13 +312,13 @@ export function skipBattle() {
         dom.p2CardsIndicator.textContent = renderCardDots(p2Tot, p2Rem);
     }
 
-    if (dom.gameOverModal.classList.contains('hidden')) {
+    if (!state.isGameOverShown) {
         showBattleResult(state.currentBattleData.summary);
     }
 }
 
 export function showBattleResult(summary) {
-    if (!dom.gameOverModal.classList.contains('hidden')) return;
+    if (state.isGameOverShown) return;
 
     dom.battleScreen.classList.add('hidden');
     dom.resultModal.classList.remove('hidden');
@@ -439,6 +443,7 @@ export function showGameOver(rankings) {
     clearBackgroundSkipTimer();
     cleanupCombatantVisuals();
 
+    state.isGameOverShown = true;
     state.pendingReadyAfterDiscard = false;
 
     dom.battleScreen.classList.add('hidden');
@@ -449,6 +454,7 @@ export function showGameOver(rankings) {
     dom.modalConfirm.classList.add('hidden');
     dom.modalHistory.classList.add('hidden');
     dom.modalSettings.classList.add('hidden');
+    if (dom.modalTips) dom.modalTips.classList.add('hidden'); // L-9修正
 
     dom.gameOverModal.classList.remove('hidden');
 

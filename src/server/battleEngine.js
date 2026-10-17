@@ -1,6 +1,6 @@
 /**
  * src/server/battleEngine.js
- * 戦闘計算・マッチング・シミュレーションモジュール (完全修正版)
+ * 戦闘計算・マッチング・シミュレーションモジュール (完全改修版)
  */
 
 const {
@@ -90,11 +90,11 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
     let p1Index = 0;
     let p2Index = 0;
 
-    const getCountsMeta = () => ({
+    const getCountsMeta = (p1Offset = 0, p2Offset = 0) => ({
         p1Total: p1TotalCount,
-        p1Remaining: Math.max(0, p1TotalCount - p1Index),
+        p1Remaining: Math.max(0, p1TotalCount - (p1Index + p1Offset)),
         p2Total: p2TotalCount,
-        p2Remaining: Math.max(0, p2TotalCount - p2Index)
+        p2Remaining: Math.max(0, p2TotalCount - (p2Index + p2Offset))
     });
 
     // 両者出撃0枚の場合：両者敗北
@@ -109,7 +109,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         };
     }
 
-    // 要件2: p1が0枚、p2が1枚以上の場合（p2の第1カードをstateとcombatPairsに保持）
+    // p1が0枚、p2が1枚以上の場合（p2の第1カードをstateとcombatPairsに保持）
     if (p1CombatTeam.length === 0) {
         const p2FirstCard = JSON.parse(JSON.stringify(p2CombatTeam[0]));
         logs.push({
@@ -133,7 +133,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         };
     }
 
-    // 要件2: p2が0枚、p1が1枚以上の場合（p1の第1カードをstateとcombatPairsに保持）
+    // p2が0枚、p1が1枚以上の場合（p1の第1カードをstateとcombatPairsに保持）
     if (p2CombatTeam.length === 0) {
         const p1FirstCard = JSON.parse(JSON.stringify(p1CombatTeam[0]));
         logs.push({
@@ -273,11 +273,14 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             const faintedSide = attackerIsP1 ? 'p2' : 'p1';
             currentPair.faintedSide = faintedSide;
 
+            // 倒れた瞬間のログで即座に残存カード数を1減らす (L-2修正)
+            const faintedCounts = attackerIsP1 ? getCountsMeta(0, 1) : getCountsMeta(1, 0);
+
             logs.push({
                 text: `${defPlayer.name}の『${defCard.name}』は倒れた！`,
                 damage: 0,
                 faintedSide,
-                counts: getCountsMeta(),
+                counts: faintedCounts,
                 state: {
                     p1Card: JSON.parse(JSON.stringify(active1)),
                     p2Card: JSON.parse(JSON.stringify(active2))
@@ -372,13 +375,43 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
 }
 
 /**
- * Fisher-Yates シャッフルおよび再戦コスト最小化マッチング
+ * 過去対戦履歴から対戦回数を取得
+ */
+function getMatchCount(matchHistory, idA, idB) {
+    if (!matchHistory || !matchHistory[idA]) return 0;
+    const record = matchHistory[idA];
+    if (record instanceof Map) {
+        return record.get(idB) || 0;
+    }
+    if (record instanceof Set) {
+        return record.has(idB) ? 1 : 0;
+    }
+    if (typeof record === 'object') {
+        return record[idB] || 0;
+    }
+    return 0;
+}
+
+/**
+ * Fisher-Yates シャッフルおよび全組み合わせ最小コスト探索によるマッチング (M-2改修)
  */
 function createRoundMatchups(activePlayers, matchHistory = {}) {
     const matchups = {};
-    if (activePlayers.length === 0) return matchups;
+    if (!activePlayers || activePlayers.length === 0) return matchups;
 
-    let pool = [...activePlayers];
+    if (activePlayers.length === 1) {
+        const sole = activePlayers[0];
+        matchups[sole.id] = {
+            opponentId: 'ghost_' + sole.id,
+            opponentName: sole.name + ' (影)',
+            isGhost: true,
+            originalId: sole.id
+        };
+        return matchups;
+    }
+
+    // ランダム性を担保するための初期シャッフル
+    const pool = [...activePlayers];
     for (let i = pool.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [pool[i], pool[j]] = [pool[j], pool[i]];
@@ -386,92 +419,99 @@ function createRoundMatchups(activePlayers, matchHistory = {}) {
 
     const n = pool.length;
 
-    function getMatchCost(idA, idB) {
-        const histA = matchHistory[idA];
-        if (!histA) return 0;
-        let count = 0;
-        if (histA instanceof Set) {
-            count = histA.has(idB) ? 1 : 0;
-        } else if (Array.isArray(histA)) {
-            count = histA.filter(x => x === idB).length;
-        }
-        return count * 10;
+    function getCost(pA, pB) {
+        return getMatchCount(matchHistory, pA.id, pB.id);
     }
 
-    let oddGhostPlayer = null;
-    let chosenGhostSource = null;
+    // 偶数プレイヤー群の全ペアリング探索
+    function solveEvenPairing(playerList) {
+        const m = playerList.length;
+        if (m === 0) return { pairs: [], cost: 0 };
 
-    if (n % 2 !== 0) {
-        let bestOddCost = Infinity;
-        let bestOddIdx = 0;
-        let bestSource = null;
+        let bestPairs = null;
+        let minCost = Infinity;
 
-        for (let i = 0; i < n; i++) {
-            const candidate = pool[i];
-            const others = pool.filter((_, idx) => idx !== i);
-            others.sort((a, b) => getMatchCost(candidate.id, a.id) - getMatchCost(candidate.id, b.id));
-            const selectedSource = others[0];
-            const cost = getMatchCost(candidate.id, selectedSource.id);
+        function search(indices, currentPairs, currentCost) {
+            if (currentCost >= minCost) return;
+            if (indices.length === 0) {
+                if (currentCost < minCost) {
+                    minCost = currentCost;
+                    bestPairs = currentPairs.map(p => [...p]);
+                }
+                return;
+            }
 
-            if (cost < bestOddCost) {
-                bestOddCost = cost;
-                bestOddIdx = i;
-                bestSource = selectedSource;
+            const first = indices[0];
+            const rest = indices.slice(1);
+
+            for (let i = 0; i < rest.length; i++) {
+                const second = rest[i];
+                const pairCost = getCost(playerList[first], playerList[second]);
+                const nextIndices = rest.filter((_, idx) => idx !== i);
+
+                currentPairs.push([playerList[first], playerList[second]]);
+                search(nextIndices, currentPairs, currentCost + pairCost);
+                currentPairs.pop();
             }
         }
 
-        oddGhostPlayer = pool[bestOddIdx];
-        chosenGhostSource = bestSource;
-        pool.splice(bestOddIdx, 1);
+        const initialIndices = Array.from({ length: m }, (_, i) => i);
+        search(initialIndices, [], 0);
+
+        return { pairs: bestPairs || [], cost: minCost };
     }
 
-    const evenCount = pool.length;
-    let bestPairs = null;
-    let minTotalCost = Infinity;
+    // 偶数人の場合：全組み合わせから対戦回数の総和最小を探索
+    if (n % 2 === 0) {
+        const result = solveEvenPairing(pool);
+        result.pairs.forEach(([p1, p2]) => {
+            matchups[p1.id] = { opponentId: p2.id, opponentName: p2.name, isGhost: false };
+            matchups[p2.id] = { opponentId: p1.id, opponentName: p1.name, isGhost: false };
+        });
+        return matchups;
+    }
 
-    function findBestPairing(remainingIndices, currentPairs, currentCost) {
-        if (remainingIndices.length === 0) {
-            if (currentCost < minTotalCost) {
-                minTotalCost = currentCost;
-                bestPairs = currentPairs.map(p => [...p]);
+    // 奇数人の場合：「影と戦うプレイヤー × 影の提供元」を含めて全探索し総コスト最小を選択
+    let bestTotalCost = Infinity;
+    let bestOddGhost = null;
+    let bestGhostSource = null;
+    let bestEvenPairs = null;
+
+    for (let i = 0; i < n; i++) {
+        const oddPlayer = pool[i];
+        const remainingPlayers = pool.filter((_, idx) => idx !== i);
+
+        // 残り偶数人の最小ペアリングを算出
+        const evenSolution = solveEvenPairing(remainingPlayers);
+
+        // oddPlayer に対する影の提供元（未対戦回数が最も少ない相手を優先）
+        for (let j = 0; j < remainingPlayers.length; j++) {
+            const sourceCandidate = remainingPlayers[j];
+            const ghostCost = getCost(oddPlayer, sourceCandidate);
+            const totalCost = evenSolution.cost + ghostCost;
+
+            if (totalCost < bestTotalCost) {
+                bestTotalCost = totalCost;
+                bestOddGhost = oddPlayer;
+                bestGhostSource = sourceCandidate;
+                bestEvenPairs = evenSolution.pairs;
             }
-            return;
-        }
-
-        if (currentCost >= minTotalCost) return;
-
-        const first = remainingIndices[0];
-        const rest = remainingIndices.slice(1);
-
-        for (let i = 0; i < rest.length; i++) {
-            const second = rest[i];
-            const pairCost = getMatchCost(pool[first].id, pool[second].id);
-            const nextRemaining = rest.filter((_, idx) => idx !== i);
-
-            currentPairs.push([first, second]);
-            findBestPairing(nextRemaining, currentPairs, currentCost + pairCost);
-            currentPairs.pop();
         }
     }
 
-    const initialIndices = Array.from({ length: evenCount }, (_, i) => i);
-    findBestPairing(initialIndices, [], 0);
-
-    if (bestPairs) {
-        bestPairs.forEach(([i, j]) => {
-            const p1 = pool[i];
-            const p2 = pool[j];
+    if (bestEvenPairs) {
+        bestEvenPairs.forEach(([p1, p2]) => {
             matchups[p1.id] = { opponentId: p2.id, opponentName: p2.name, isGhost: false };
             matchups[p2.id] = { opponentId: p1.id, opponentName: p1.name, isGhost: false };
         });
     }
 
-    if (oddGhostPlayer && chosenGhostSource) {
-        matchups[oddGhostPlayer.id] = {
-            opponentId: 'ghost_' + chosenGhostSource.id,
-            opponentName: chosenGhostSource.name + ' (影)',
+    if (bestOddGhost && bestGhostSource) {
+        matchups[bestOddGhost.id] = {
+            opponentId: 'ghost_' + bestGhostSource.id,
+            opponentName: bestGhostSource.name + ' (影)',
             isGhost: true,
-            originalId: chosenGhostSource.id
+            originalId: bestGhostSource.id
         };
     }
 

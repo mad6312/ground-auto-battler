@@ -1,6 +1,6 @@
 /**
  * public/js/state.js
- * クライアント側状態管理およびDOM要素参照モジュール (要件改修版)
+ * クライアント側状態管理およびDOM要素参照モジュール (完全改修版)
  */
 
 export const socket = io();
@@ -35,14 +35,15 @@ export const state = {
 
     battleAnimationTimer: null,
     battleTimeoutIds: [],
+    roundPopupTimer: null,
 
     currentBattleData: null,
     isGameOverDecided: false,
+    isGameOverShown: false, // H-4: 明示的フラグ管理
     pendingReadyAfterDiscard: false,
 
     cachedOpponentsList: [],
 
-    // N-1, N-13, N-14: 状態変数をstate内に集約
     latestRankings: null,
     hasClickedNextInBattle: false,
     displayedLifeMap: new Map(),
@@ -60,9 +61,14 @@ export function clearAllBattleTimers() {
     state.battleTimeoutIds = [];
 }
 
-// N-1, N-14: クライアント側ゲーム状態および開いているモーダルの一括完全リセット
+// クライアント側ゲーム状態および開いているモーダルの一括完全リセット (H-4 / L-10改修)
 export function resetClientGameState() {
     clearAllBattleTimers();
+
+    if (state.roundPopupTimer) {
+        clearTimeout(state.roundPopupTimer);
+        state.roundPopupTimer = null;
+    }
 
     state.localHand = [];
     state.localDeploySlots = [null, null, null];
@@ -75,6 +81,7 @@ export function resetClientGameState() {
     state.pendingHandDropAnim = null;
     state.currentBattleData = null;
     state.isGameOverDecided = false;
+    state.isGameOverShown = false;
     state.pendingReadyAfterDiscard = false;
     state.latestRankings = null;
     state.hasClickedNextInBattle = false;
@@ -83,7 +90,8 @@ export function resetClientGameState() {
     state.isRoundPopupPlaying = false;
     state.currentOpponentName = '未定';
 
-    // モーダルの完全非表示
+    // モーダルの完全非表示（H-4: gameOverModal も確実に閉じる）
+    if (dom.gameOverModal) dom.gameOverModal.classList.add('hidden');
     if (dom.modalOverhand) dom.modalOverhand.classList.add('hidden');
     if (dom.modalConfirm) dom.modalConfirm.classList.add('hidden');
     if (dom.modalHistory) dom.modalHistory.classList.add('hidden');
@@ -106,7 +114,7 @@ export function escapeHtml(str) {
         .replace(/'/g, '&#039;');
 }
 
-// N-15: トーストメッセージ表示 (タイマー重複クリア付き)
+// トーストメッセージ表示 (タイマー重複クリア付き)
 let toastTimer = null;
 export function showToast(msg) {
     let toast = document.getElementById('game-toast');

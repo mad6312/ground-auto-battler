@@ -1,6 +1,6 @@
 /**
  * public/js/main.js
- * クライアント側メインエントリーモジュール (要件改修版)
+ * クライアント側メインエントリーモジュール (完全改修版)
  */
 
 import {
@@ -112,6 +112,10 @@ function renderOpponentsBar() {
 
         const effectiveIsAlive = effectiveLife > 0;
 
+        if (state.reservedSpectateTargetId === p.id && !effectiveIsAlive) {
+            state.reservedSpectateTargetId = null;
+        }
+
         if (p.id === state.myId) {
             state.myPlayer = p;
             dom.playerNameDisplay.textContent = p.name;
@@ -142,8 +146,10 @@ function renderOpponentsBar() {
 
         if (isMeDead) {
             if (state.currentGameState === 'prep') {
-                const isReserved = state.reservedSpectateTargetId === p.id;
-                actionBtnHtml = `<button class="btn btn-reserve-spectate ${isReserved ? 'warning' : 'secondary'}">${isReserved ? '予約解除' : '観戦予約'}</button>`;
+                if (effectiveIsAlive) {
+                    const isReserved = state.reservedSpectateTargetId === p.id;
+                    actionBtnHtml = `<button class="btn btn-reserve-spectate ${isReserved ? 'warning' : 'secondary'}">${isReserved ? '予約解除' : '観戦予約'}</button>`;
+                }
             } else if (effectiveIsAlive) {
                 actionBtnHtml = `<button class="btn btn-spectate primary">観戦</button>`;
             }
@@ -235,9 +241,11 @@ function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
 
     renderHand(syncLineupChanges, { hideCardUid: state.currentDistributeCardUid });
 
-    setTimeout(() => {
+    if (state.roundPopupTimer) clearTimeout(state.roundPopupTimer);
+    state.roundPopupTimer = setTimeout(() => {
         popup.classList.add('hidden');
         state.isRoundPopupPlaying = false;
+        state.roundPopupTimer = null;
 
         renderHand(syncLineupChanges);
 
@@ -251,7 +259,7 @@ function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
                     width: targetRect.width,
                     height: targetRect.height
                 };
-                animateCardFlight(startRect, targetEl);
+                animateCardFlight(startRect, targetEl, state.currentDistributeCardUid);
             }
             state.currentDistributeCardUid = null;
         }
@@ -361,7 +369,7 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
                     width: targetRect.width,
                     height: targetRect.height
                 };
-                animateCardFlight(startRect, targetEl);
+                animateCardFlight(startRect, targetEl, dragData.card.uid);
             }
         }
     }
@@ -387,7 +395,6 @@ socket.on('disconnect', () => {
     dom.viewLobby.classList.remove('hidden');
 });
 
-// 要件2: ロビー状態の更新とゲーム開始ボタンの可視化
 socket.on('lobby:update', (data) => {
     state.currentGameState = data.gameState;
     state.isHost = data.hostSocketId === state.myId;
@@ -401,6 +408,11 @@ socket.on('lobby:update', (data) => {
         dom.waitAnnouncementBanner.classList.add('hidden');
         state.hasClickedNextInBattle = false;
         state.displayedLifeMap.clear();
+
+        if (!state.isGameOverShown && dom.resultModal.classList.contains('hidden') && dom.battleScreen.classList.contains('hidden')) {
+            state.latestRankings = null;
+            state.isGameOverDecided = false;
+        }
     }
 
     if (me && me.isEntered) {
@@ -415,7 +427,6 @@ socket.on('lobby:update', (data) => {
         dom.lobbyEntryBadge.classList.remove('active');
     }
 
-    // ホストかつ2人以上参加中かつロビー状態なら確実に「ゲーム開始」ボタンを表示
     if (state.isHost && data.enteredCount >= 2 && state.currentGameState === 'lobby') {
         dom.btnStartGame.classList.remove('hidden');
     } else {
@@ -511,12 +522,19 @@ socket.on('game:sync', (data) => {
 
     dom.btnReroll.disabled = (state.currentGameState !== 'prep');
 
+    // 要件4: ラウンド開始時（準備フェーズ移行時）に出撃カードをすべて手札へ戻す完全初期化
     if (previousState !== 'prep' && state.currentGameState === 'prep') {
         dom.tabShop.click();
         state.activeSpectatingId = null;
         state.hasClickedNextInBattle = false;
         state.currentOpponentName = '未定';
         dom.playerReadyLamp.classList.remove('ready');
+
+        // 出撃スロットを完全初期化（全カードを手札へ回収）
+        state.localDeploySlots = [null, null, null];
+        renderDeploySlots(syncLineupChanges);
+        renderHand(syncLineupChanges);
+        syncLineupChanges();
 
         if (me && me.isAlive) {
             dom.btnFinishPrep.disabled = false;
@@ -582,13 +600,9 @@ socket.on('player:sync', (data) => {
         dom.playerLifeDisplay.textContent = formatLife(data.life);
     }
 
-    if (data.selectedLineup) {
-        state.localDeploySlots = [
-            data.selectedLineup[0] ? data.selectedLineup[0].uid : null,
-            data.selectedLineup[1] ? data.selectedLineup[1].uid : null,
-            data.selectedLineup[2] ? data.selectedLineup[2].uid : null
-        ];
-    }
+    // 手札に存在しないUIDを除外
+    const currentHandUids = new Set(state.localHand.map(c => c.uid));
+    state.localDeploySlots = state.localDeploySlots.map(uid => (uid && currentHandUids.has(uid) ? uid : null));
 
     renderHand(syncLineupChanges, {
         hideCardUid: state.isRoundPopupPlaying ? state.currentDistributeCardUid : null
@@ -608,7 +622,7 @@ socket.on('player:sync', (data) => {
                     width: targetRect.width,
                     height: targetRect.height
                 };
-                animateCardFlight(startRect, targetEl);
+                animateCardFlight(startRect, targetEl, newlyAddedCard.uid);
             }
         }
         state.pendingHandDropAnim = null;
@@ -628,7 +642,6 @@ socket.on('player:sync', (data) => {
     }
 });
 
-// 要件3: バトル開始時は通常通りバトル演出を実行（ランキングは内部保持）
 socket.on('battle:start', ({ summary, logs, isGameOverDecided: gameOverFlag, rankings }) => {
     if (rankings) {
         state.latestRankings = rankings;
@@ -656,14 +669,12 @@ socket.on('battle:start_notice', ({ isGameOverDecided: gameOverFlag, rankings })
     }
 });
 
-// 要件3: バトル実行中や結果画面の閲覧中は強制的に画面を奪わない
 socket.on('game:ended', ({ rankings }) => {
     state.latestRankings = rankings;
 
     const isBattling = !dom.battleScreen.classList.contains('hidden');
     const isViewingResult = !dom.resultModal.classList.contains('hidden');
 
-    // バトル中・リザルト閲覧中でない場合にのみ即座に表示
     if (!isBattling && !isViewingResult) {
         clearAllBattleTimers();
         showGameOver(rankings);
@@ -754,7 +765,6 @@ dom.btnFinishPrep.onclick = () => {
 
 dom.btnSkipBattle.onclick = skipBattle;
 
-// 要件3: バトルリザルト「次へ」押下時に自発的に最終順位画面へ遷移
 dom.btnResultNext.onclick = () => {
     clearAllBattleTimers();
     dom.resultModal.classList.add('hidden');
@@ -768,7 +778,6 @@ dom.btnResultNext.onclick = () => {
     }
     renderOpponentsBar();
 
-    // 決着確定時は、結果確認後に自発的に最終順位画面を表示
     if (state.latestRankings || state.isGameOverDecided) {
         if (state.latestRankings) {
             showGameOver(state.latestRankings);
@@ -783,24 +792,29 @@ dom.btnResultNext.onclick = () => {
 
     if (isSpectatingBattle) {
         state.activeSpectatingId = null;
+        if (state.hasClickedNextInBattle && state.currentGameState === 'battle') {
+            dom.waitAnnouncementBanner.textContent = '全員のバトル終了を待っています...';
+            dom.waitAnnouncementBanner.classList.remove('hidden');
+        }
         return;
     }
 
     dom.nextOpponentIndicator.classList.add('hidden');
 
-    state.hasClickedNextInBattle = true;
-    if (state.myPlayer) {
-        state.myPlayer.isReady = true;
+    if (state.currentGameState === 'battle') {
+        state.hasClickedNextInBattle = true;
+        if (state.myPlayer) {
+            state.myPlayer.isReady = true;
+        }
+        dom.playerReadyLamp.classList.add('ready');
+        dom.waitAnnouncementBanner.textContent = '全員のバトル終了を待っています...';
+        dom.waitAnnouncementBanner.classList.remove('hidden');
     }
-    dom.playerReadyLamp.classList.add('ready');
-    dom.waitAnnouncementBanner.textContent = '全員のバトル終了を待っています...';
-    dom.waitAnnouncementBanner.classList.remove('hidden');
 
     renderOpponentsBar();
     socket.emit('battle:next');
 };
 
-// 要件2: 再戦ボタン押下処理
 dom.btnRematch.onclick = () => {
     resetClientGameState();
     dom.gameOverModal.classList.add('hidden');
@@ -809,7 +823,6 @@ dom.btnRematch.onclick = () => {
     socket.emit('lobby:rematch');
 };
 
-// 要件2: 退出ボタン押下処理
 dom.btnLeave.onclick = () => {
     resetClientGameState();
     state.currentGameState = 'lobby';
