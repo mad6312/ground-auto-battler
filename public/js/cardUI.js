@@ -1,6 +1,6 @@
 /**
  * public/js/cardUI.js
- * カードUIコンポーネント生成および表示制御モジュール (完全改修版)
+ * カードUIコンポーネント生成および表示制御モジュール (完全改修版 v2)
  */
 
 import { state, dom, socket, escapeHtml } from './state.js';
@@ -26,15 +26,12 @@ const RARITY_ORDER = { common: 1, uncommon: 2, rare: 3, epic: 4, legend: 5 };
 const TRIBE_ORDER = { 'ドワーフ': 1, 'ドラゴン': 2, 'エルフ': 3, 'オーク': 4, 'ヴァンパイア': 5, 'リザードマン': 6 };
 const ELEMENT_ORDER = { '火': 1, '氷': 2, '風': 3, '雷': 4, '水': 5, '地': 6 };
 
-// 飛翔移動中のカードUIDを追跡管理するSet
-const activeFlightUids = new Set();
+// N-9: 飛翔移動中のカードUIDを参照カウント管理（同一カードの連続操作での残像防止）
+const activeFlightCounts = new Map();
 
-// 現在マウスホバーまたはドラッグされているカード情報（移動中のカード判定にも動的連動）
+// 現在マウスホバーまたはドラッグされているカード情報
 let currentHoveredCard = null;
 let currentHoveredArea = null;
-
-// タッチ長押しタイマーが発火したタイムスタンプ（タッチ端末特有の二重発火防止専用）
-let lastTouchLongTapTimestamp = 0;
 
 export function sortHandCards(cards) {
     return [...cards].sort((a, b) => {
@@ -100,8 +97,23 @@ export function getBuffedStats(card, shouldBuff = false) {
 }
 
 /**
+ * 画面内の手札・ショップ・市場・出撃枠に同レア・同種族の合成相手が存在するか判定
+ */
+export function hasSynthesizablePartner(card) {
+    if (!card) return false;
+    const validSelector = '#player-hand .card-item, #shop-cards .card-item, #market-cards .card-item, .slots-container .card-item';
+    const elements = document.querySelectorAll(validSelector);
+    for (const el of elements) {
+        const d = el.__cardData;
+        if (d && d.uid !== card.uid && d.rarity === card.rarity && d.tribe === card.tribe) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * 同レアリティ・同種族カードの強調アニメーション適用
- * 移動中のカード (.floating-flight-card) も通常カードと全く同一ルールで走査対象に含める
  */
 export function highlightSynthesizableCards(sourceCard, sourceArea) {
     if (!sourceCard) return;
@@ -109,13 +121,11 @@ export function highlightSynthesizableCards(sourceCard, sourceArea) {
     if (!allowedAreas.includes(sourceArea)) return;
     if (!dom.modalOverhand.classList.contains('hidden')) return;
 
-    // 移動中のカード (.floating-flight-card) も対象に含める
     const validContainersSelector = '#player-hand .card-item, #shop-cards .card-item, #market-cards .card-item, .slots-container .card-item, .floating-flight-card';
     const targetCardElements = document.querySelectorAll(validContainersSelector);
 
     targetCardElements.forEach(el => {
         const cardData = el.__cardData;
-        // ホバーされているカード自身ではなく、かつ同レアリティ・同種族であるカードのみを強調
         if (cardData && cardData.uid !== sourceCard.uid) {
             if (cardData.rarity === sourceCard.rarity && cardData.tribe === sourceCard.tribe) {
                 el.classList.add('card-synth-highlight');
@@ -128,42 +138,53 @@ export function highlightSynthesizableCards(sourceCard, sourceArea) {
     });
 }
 
+// N-7: 強調解除時にホバー状態も確実にリセット
 export function clearSynthesizableHighlights() {
+    currentHoveredCard = null;
+    currentHoveredArea = null;
     document.querySelectorAll('.card-synth-highlight').forEach(el => {
         el.classList.remove('card-synth-highlight');
     });
 }
 
 /**
- * カードの飛翔アニメーション
- * 移動中のカード自身に不当な強制発光は行わず、マウスオーバー状態に完全連動
+ * N-6 / N-9: カード飛翔アニメーション (cardオブジェクト/uid文字列の完全両立と参照カウント管理)
  */
-export function animateCardFlight(startRect, targetElement, card = null, onComplete = null) {
+export function animateCardFlight(startRect, targetElement, cardOrUid = null, onComplete = null) {
     if (!startRect || !targetElement) {
         if (onComplete) onComplete();
         return;
     }
 
-    const cardUid = card ? card.uid : null;
+    let cardObj = null;
+    let cardUid = null;
+
+    if (cardOrUid) {
+        if (typeof cardOrUid === 'object') {
+            cardObj = cardOrUid;
+            cardUid = cardOrUid.uid;
+        } else if (typeof cardOrUid === 'string') {
+            cardUid = cardOrUid;
+            cardObj = state.localHand.find(c => c && c.uid === cardUid) || null;
+        }
+    }
 
     if (cardUid) {
-        activeFlightUids.add(cardUid);
+        activeFlightCounts.set(cardUid, (activeFlightCounts.get(cardUid) || 0) + 1);
     }
 
     const endRect = targetElement.getBoundingClientRect();
     const ghost = targetElement.cloneNode(true);
     ghost.classList.add('floating-flight-card');
-    ghost.classList.remove('card-synth-highlight'); // 初期状態では無条件発光させない
+    ghost.classList.remove('card-synth-highlight');
 
-    // 移動中のゴースト要素にカードデータを紐付け、強調判定の走査対象とする
-    if (card) {
-        ghost.__cardData = card;
+    if (cardObj) {
+        ghost.__cardData = cardObj;
     }
 
-    // 移動開始時点で別のカードがすでにホバー/ドラッグ中であれば、そのカードの条件に基づき強調判定
-    if (currentHoveredCard && currentHoveredArea) {
-        if (card && card.uid !== currentHoveredCard.uid &&
-            card.rarity === currentHoveredCard.rarity && card.tribe === currentHoveredCard.tribe) {
+    if (currentHoveredCard && currentHoveredArea && cardObj) {
+        if (cardObj.uid !== currentHoveredCard.uid &&
+            cardObj.rarity === currentHoveredCard.rarity && cardObj.tribe === currentHoveredCard.tribe) {
             ghost.classList.add('card-synth-highlight');
         }
     }
@@ -189,14 +210,18 @@ export function animateCardFlight(startRect, targetElement, card = null, onCompl
         hasCleanedUp = true;
 
         if (cardUid) {
-            activeFlightUids.delete(cardUid);
-            const currentTarget = document.querySelector(`[data-card-uid="${cardUid}"]`);
-            if (currentTarget) {
-                currentTarget.style.opacity = '1';
-                // 着地後、現在ホバー中のカードがあれば強調状態を再反映
-                if (currentHoveredCard && currentHoveredArea) {
-                    highlightSynthesizableCards(currentHoveredCard, currentHoveredArea);
+            const currentCount = activeFlightCounts.get(cardUid) || 1;
+            if (currentCount <= 1) {
+                activeFlightCounts.delete(cardUid);
+                const currentTarget = document.querySelector(`[data-card-uid="${cardUid}"]`);
+                if (currentTarget) {
+                    currentTarget.style.opacity = '1';
+                    if (currentHoveredCard && currentHoveredArea) {
+                        highlightSynthesizableCards(currentHoveredCard, currentHoveredArea);
+                    }
                 }
+            } else {
+                activeFlightCounts.set(cardUid, currentCount - 1);
             }
         } else {
             targetElement.style.opacity = '1';
@@ -310,7 +335,6 @@ window.addEventListener('pointermove', (e) => {
 
         s.sourceElement.style.opacity = '0.35';
 
-        // ドラッグ中のカードをホバー対象として登録し強調
         currentHoveredCard = s.card;
         currentHoveredArea = s.dragInfo.type;
         highlightSynthesizableCards(s.card, s.dragInfo.type);
@@ -335,8 +359,10 @@ window.addEventListener('blur', () => {
     }
 });
 
+// N-8: タッチ操作とPCマウス操作の厳格分離（タッチ時のcontextmenu二重発火を完全排除）
 function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
     let longTapTimer = null;
+    let isTouchActive = false;
 
     const clearTap = () => {
         if (longTapTimer) {
@@ -356,13 +382,17 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
 
         clearTap();
 
-        if (e.pointerType === 'touch' && onContextMenu) {
-            longTapTimer = setTimeout(() => {
-                lastTouchLongTapTimestamp = Date.now();
-                onContextMenu();
-                if (navigator.vibrate) navigator.vibrate(30);
-                longTapTimer = null;
-            }, 480);
+        if (e.pointerType === 'touch') {
+            isTouchActive = true;
+            if (onContextMenu) {
+                longTapTimer = setTimeout(() => {
+                    onContextMenu();
+                    if (navigator.vibrate) navigator.vibrate(30);
+                    longTapTimer = null;
+                }, 480);
+            }
+        } else {
+            isTouchActive = false;
         }
 
         activeDragSession = {
@@ -384,6 +414,17 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
 
     cardElement.addEventListener('pointerup', clearTap);
     cardElement.addEventListener('pointercancel', clearTap);
+
+    // N-8: タッチ起点の際は contextmenu を無視してタイマー側のみで確実に1回実行。PCマウスはディレイなく即実行。
+    if (onContextMenu) {
+        cardElement.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            if (isTouchActive || e.pointerType === 'touch') {
+                return;
+            }
+            onContextMenu();
+        });
+    }
 }
 
 /**
@@ -396,7 +437,7 @@ export function createCardElement(card, options = {}) {
     if (options.nonDraggable) div.dataset.nonDraggable = 'true';
     div.__cardData = card;
 
-    if (activeFlightUids.has(card.uid)) {
+    if (activeFlightCounts.has(card.uid)) {
         div.style.opacity = '0';
     }
 
@@ -473,7 +514,6 @@ export function createCardElement(card, options = {}) {
 
     const sourceArea = options.dragInfo ? options.dragInfo.type : options.area;
 
-    // マウスホバー検知
     div.addEventListener('mouseenter', () => {
         if (!state.pointerDrag.isDragging && sourceArea) {
             currentHoveredCard = card;
@@ -482,7 +522,6 @@ export function createCardElement(card, options = {}) {
         }
     });
 
-    // マウス離脱検知
     div.addEventListener('mouseleave', () => {
         if (!state.pointerDrag.isDragging) {
             if (currentHoveredCard && currentHoveredCard.uid === card.uid) {
@@ -495,16 +534,6 @@ export function createCardElement(card, options = {}) {
 
     if (!options.nonDraggable && options.dragInfo) {
         initPointerDrag(div, card, options.dragInfo, options.onContextMenu);
-    }
-
-    if (options.onContextMenu) {
-        div.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            if (Date.now() - lastTouchLongTapTimestamp < 450) {
-                return;
-            }
-            options.onContextMenu();
-        });
     }
 
     return div;
@@ -604,9 +633,6 @@ export function renderHand(syncLineupCallback, options = {}) {
                         const startRect = cardEl.getBoundingClientRect();
                         state.localDeploySlots[i] = card.uid;
 
-                        // 移動開始によりマウスオーバーが外れるためホバー状態と強調を一旦クリア
-                        currentHoveredCard = null;
-                        currentHoveredArea = null;
                         clearSynthesizableHighlights();
 
                         renderHand(syncLineupCallback);
@@ -641,9 +667,6 @@ export function renderDeploySlots(syncLineupCallback) {
                         const startRect = cardEl.getBoundingClientRect();
                         state.localDeploySlots[index] = null;
 
-                        // 移動開始によりマウスオーバーが外れるためホバー状態と強調を一旦クリア
-                        currentHoveredCard = null;
-                        currentHoveredArea = null;
                         clearSynthesizableHighlights();
 
                         renderHand(syncLineupCallback);

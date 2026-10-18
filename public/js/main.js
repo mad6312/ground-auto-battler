@@ -1,6 +1,6 @@
 /**
  * public/js/main.js
- * クライアント側メインエントリーモジュール (完全改修版)
+ * クライアント側メインエントリーモジュール (完全改修版 v3)
  */
 
 import {
@@ -128,8 +128,10 @@ function renderOpponentsBar() {
                 dom.playerReadyLamp.classList.remove('ready');
             }
 
+            // 要件1: 脱落確定時、完了ボタンおよびリロールボタンを即座に非活性化
             if (!effectiveIsAlive) {
                 dom.btnFinishPrep.disabled = true;
+                dom.btnReroll.disabled = true;
             }
             return;
         }
@@ -259,7 +261,8 @@ function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
                     width: targetRect.width,
                     height: targetRect.height
                 };
-                animateCardFlight(startRect, targetEl, state.currentDistributeCardUid);
+                const cardObj = state.localHand.find(c => c && c.uid === state.currentDistributeCardUid);
+                animateCardFlight(startRect, targetEl, cardObj || state.currentDistributeCardUid);
             }
             state.currentDistributeCardUid = null;
         }
@@ -288,17 +291,19 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
         return;
     }
 
-    // ② 出撃スロットへのドロップ
+    // ② 出撃スロットへのドロップ (ショップ/市場からの直接配置対応)
     const deploySlot = dropTarget.closest('.deploy-slot');
     if (deploySlot) {
         const slotIndex = parseInt(deploySlot.dataset.slot, 10);
 
         if (dragData.type === 'shop') {
+            state.pendingDeploy = { slotIndex };
             socket.emit('shop:buyAndDeploy', {
                 shopIndex: dragData.shopIndex,
                 slotIndex
             });
         } else if (dragData.type === 'market') {
+            state.pendingDeploy = { slotIndex };
             socket.emit('market:buyAndDeploy', {
                 marketCardUid: dragData.marketCardUid,
                 slotIndex
@@ -350,9 +355,11 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
     if (handArea) {
         if (dragData.type === 'shop') {
             state.pendingHandDropAnim = { x: dropPoint.x, y: dropPoint.y };
+            setTimeout(() => { state.pendingHandDropAnim = null; }, 3000);
             socket.emit('shop:buy', { shopIndex: dragData.shopIndex });
         } else if (dragData.type === 'market') {
             state.pendingHandDropAnim = { x: dropPoint.x, y: dropPoint.y };
+            setTimeout(() => { state.pendingHandDropAnim = null; }, 3000);
             socket.emit('market:buy', { marketCardUid: dragData.marketCardUid });
         } else if (dragData.type === 'deploy') {
             state.localDeploySlots[dragData.slotIndex] = null;
@@ -369,7 +376,7 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
                     width: targetRect.width,
                     height: targetRect.height
                 };
-                animateCardFlight(startRect, targetEl, dragData.card.uid);
+                animateCardFlight(startRect, targetEl, dragData.card);
             }
         }
     }
@@ -469,11 +476,13 @@ socket.on('matchup:notice', ({ opponentName }) => {
 
 socket.on('shop:buy:error', ({ message }) => {
     state.pendingHandDropAnim = null;
+    state.pendingDeploy = null;
     showToast(message || 'ゴールドが足りません');
 });
 
 socket.on('market:buy:error', ({ message }) => {
     state.pendingHandDropAnim = null;
+    state.pendingDeploy = null;
     showToast(message || 'ゴールドが足りません');
 });
 
@@ -520,9 +529,10 @@ socket.on('game:sync', (data) => {
         dom.nextOpponentIndicator.classList.add('hidden');
     }
 
-    dom.btnReroll.disabled = (state.currentGameState !== 'prep');
+    // 要件1: 準備フェーズであっても、脱落プレイヤーはリロールボタンを恒久的に非活性化
+    const isPlayerAlive = me && me.isAlive;
+    dom.btnReroll.disabled = (state.currentGameState !== 'prep' || !isPlayerAlive);
 
-    // 要件4: ラウンド開始時（準備フェーズ移行時）に出撃カードをすべて手札へ戻す完全初期化
     if (previousState !== 'prep' && state.currentGameState === 'prep') {
         dom.tabShop.click();
         state.activeSpectatingId = null;
@@ -530,7 +540,7 @@ socket.on('game:sync', (data) => {
         state.currentOpponentName = '未定';
         dom.playerReadyLamp.classList.remove('ready');
 
-        // 出撃スロットを完全初期化（全カードを手札へ回収）
+        // ラウンド開始時：繰り出しスロットを完全初期化（全カードを手札へ回収）
         state.localDeploySlots = [null, null, null];
         renderDeploySlots(syncLineupChanges);
         renderHand(syncLineupChanges);
@@ -541,6 +551,7 @@ socket.on('game:sync', (data) => {
             dom.waitAnnouncementBanner.classList.add('hidden');
         } else {
             dom.btnFinishPrep.disabled = true;
+            dom.btnReroll.disabled = true; // 要件1
         }
 
         const aliveCount = state.cachedOpponentsList.filter(p => p.isAlive && p.isEntered).length;
@@ -550,6 +561,7 @@ socket.on('game:sync', (data) => {
     if (state.currentGameState === 'prep') {
         if (me && !me.isAlive) {
             dom.btnFinishPrep.disabled = true;
+            dom.btnReroll.disabled = true; // 要件1
             dom.waitAnnouncementBanner.classList.add('hidden');
         } else if (me && me.isReady) {
             dom.waitAnnouncementBanner.textContent = '全員の準備完了を待っています...';
@@ -600,6 +612,16 @@ socket.on('player:sync', (data) => {
         dom.playerLifeDisplay.textContent = formatLife(data.life);
     }
 
+    // shop / market からの直接配置（buyAndDeploy）の反映
+    if (state.pendingDeploy && data.hand) {
+        const newlyAddedCard = data.hand.find(c => !prevHandUids.has(c.uid));
+        if (newlyAddedCard) {
+            state.localDeploySlots[state.pendingDeploy.slotIndex] = newlyAddedCard.uid;
+            syncLineupChanges();
+        }
+        state.pendingDeploy = null;
+    }
+
     // 手札に存在しないUIDを除外
     const currentHandUids = new Set(state.localHand.map(c => c.uid));
     state.localDeploySlots = state.localDeploySlots.map(uid => (uid && currentHandUids.has(uid) ? uid : null));
@@ -610,6 +632,7 @@ socket.on('player:sync', (data) => {
     renderShop();
     renderDeploySlots(syncLineupChanges);
 
+    // 手札ドロップ時の飛翔アニメーション
     if (state.pendingHandDropAnim && data.hand) {
         const newlyAddedCard = data.hand.find(c => !prevHandUids.has(c.uid));
         if (newlyAddedCard) {
@@ -622,7 +645,7 @@ socket.on('player:sync', (data) => {
                     width: targetRect.width,
                     height: targetRect.height
                 };
-                animateCardFlight(startRect, targetEl, newlyAddedCard.uid);
+                animateCardFlight(startRect, targetEl, newlyAddedCard);
             }
         }
         state.pendingHandDropAnim = null;
@@ -671,6 +694,10 @@ socket.on('battle:start_notice', ({ isGameOverDecided: gameOverFlag, rankings })
 
 socket.on('game:ended', ({ rankings }) => {
     state.latestRankings = rankings;
+
+    if (state.currentGameState === 'lobby' || !state.myPlayer || !state.myPlayer.isEntered) {
+        return;
+    }
 
     const isBattling = !dom.battleScreen.classList.contains('hidden');
     const isViewingResult = !dom.resultModal.classList.contains('hidden');
@@ -733,8 +760,10 @@ dom.tabMarket.onclick = () => {
     dom.shopPanel.classList.add('hidden');
 };
 
+// 要件1: 脱落プレイヤーのリロールクリック操作ガード
 dom.btnReroll.onclick = () => {
     if (state.currentGameState !== 'prep') return;
+    if (!state.myPlayer || !state.myPlayer.isAlive) return;
     socket.emit('shop:reroll');
 };
 

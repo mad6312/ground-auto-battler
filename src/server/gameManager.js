@@ -1,6 +1,6 @@
 /**
  * src/server/gameManager.js
- * プレイヤーおよび全体ゲーム状態の管理モジュール (完全改修版)
+ * プレイヤーおよび全体ゲーム状態の管理モジュール (完全均等マッチング＆ホスト保護版)
  */
 
 const crypto = require('crypto');
@@ -120,7 +120,7 @@ class Player {
             }
         } else {
             for (let i = 0; i < 6; i++) {
-                if (!this.shop[i].locked) {
+                if (!this.shop[i] || !this.shop[i].locked) {
                     this.shop[i] = { card: createRandomShopCard(round), locked: false };
                 }
             }
@@ -157,8 +157,14 @@ class GameManager {
         this.disconnectedPlayers = [];
         this.matchHistory = {}; // id -> { opponentId: count }
         this.gameOverDecided = false;
-        this.finalOutcome = null; // { type: 'winner'|'jointWinners'|'noWinner', id?, ids? }
+        this.finalOutcome = null;
         this.battleParticipants = new Set();
+
+        // 公平マッチング用メタデータ
+        this.ghostMatchCounts = {}; // playerId -> 影戦累計回数
+        this.lastPvPOpponents = {}; // playerId -> 直前に対人戦(生身)で対戦した相手ID
+        this.lastRoundGhostFighters = new Set(); // 直前ラウンドで影戦を行ったプレイヤーID
+        this.lastGhostSources = {}; // playerId -> 直前に対戦した影の提供元ID
     }
 
     addPlayer(id, name) {
@@ -166,6 +172,9 @@ class GameManager {
         this.players[id] = p;
         if (!this.matchHistory[id]) {
             this.matchHistory[id] = {};
+        }
+        if (this.ghostMatchCounts[id] === undefined) {
+            this.ghostMatchCounts[id] = 0;
         }
         this.updateHost();
         return p;
@@ -183,6 +192,11 @@ class GameManager {
         }
         delete this.players[id];
         delete this.matchHistory[id];
+        delete this.ghostMatchCounts[id];
+        delete this.lastPvPOpponents[id];
+        delete this.lastGhostSources[id];
+        this.lastRoundGhostFighters.delete(id);
+
         this.updateHost();
 
         if (Object.keys(this.players).length === 0) {
@@ -204,21 +218,42 @@ class GameManager {
         this.gameOverDecided = false;
         this.finalOutcome = null;
         this.battleParticipants.clear();
+
+        this.ghostMatchCounts = {};
+        this.lastPvPOpponents = {};
+        this.lastRoundGhostFighters.clear();
+        this.lastGhostSources = {};
     }
 
     getPlayer(id) {
         return this.players[id];
     }
 
-    updateHost() {
-        const ids = Object.keys(this.players);
-        if (ids.length === 0) {
+    /**
+     * 要件1修正: ホスト権限の更新・委譲
+     * - 切断時、または明示的な「退出」(forceTransferFromId)時のみ委譲
+     * - 結果閲覧中（isEntered === false）であることを理由にホスト権限を奪わない
+     */
+    updateHost(forceTransferFromId = null) {
+        const allPlayerList = Object.values(this.players);
+        if (allPlayerList.length === 0) {
             this.hostSocketId = null;
             return;
         }
-        // ホスト未設定、または現在のホストが切断済みの場合、先頭の残存プレイヤーへ委譲
-        if (!this.hostSocketId || !this.players[this.hostSocketId]) {
-            this.hostSocketId = ids[0];
+
+        const currentHost = this.players[this.hostSocketId];
+        const needTransfer = !currentHost || (forceTransferFromId && this.hostSocketId === forceTransferFromId);
+
+        if (needTransfer) {
+            const enteredPlayers = allPlayerList.filter(p => p.isEntered);
+            const candidateEntered = enteredPlayers.filter(p => p.id !== forceTransferFromId);
+
+            if (candidateEntered.length > 0) {
+                this.hostSocketId = candidateEntered[0].id;
+            } else {
+                const otherConnected = allPlayerList.filter(p => p.id !== forceTransferFromId);
+                this.hostSocketId = otherConnected.length > 0 ? otherConnected[0].id : allPlayerList[0].id;
+            }
         }
     }
 
@@ -238,15 +273,58 @@ class GameManager {
         }));
     }
 
-    recordMatch(p1Id, p2Id, originalGhostId = null) {
+    /**
+     * 要件2改修: マッチング用メタデータ取得（生身PvPと影戦の履歴を完全分離）
+     */
+    getMatchMetadata() {
+        return {
+            ghostMatchCounts: this.ghostMatchCounts,
+            lastPvPOpponents: this.lastPvPOpponents,
+            lastRoundGhostFighters: this.lastRoundGhostFighters,
+            lastGhostSources: this.lastGhostSources
+        };
+    }
+
+    /**
+     * 要件2改修: 対戦記録（生身対人戦と影戦を明確に分離して記録）
+     */
+    recordMatch(p1Id, p2Id, isGhost = false, originalGhostId = null) {
         if (!this.matchHistory[p1Id]) this.matchHistory[p1Id] = {};
-        const target2 = originalGhostId || p2Id;
 
-        this.matchHistory[p1Id][target2] = (this.matchHistory[p1Id][target2] || 0) + 1;
+        if (isGhost) {
+            const targetGhostSourceId = originalGhostId || p2Id;
 
-        if (this.players[target2]) {
-            if (!this.matchHistory[target2]) this.matchHistory[target2] = {};
-            this.matchHistory[target2][p1Id] = (this.matchHistory[target2][p1Id] || 0) + 1;
+            // 影戦累計回数と直前影戦状態を更新
+            this.ghostMatchCounts[p1Id] = (this.ghostMatchCounts[p1Id] || 0) + 1;
+            this.lastRoundGhostFighters.add(p1Id);
+            this.lastGhostSources[p1Id] = targetGhostSourceId;
+
+            // 重要: 影戦を行ったプレイヤーは直前に生身の対戦をしていないため、lastPvPOpponents をクリア
+            delete this.lastPvPOpponents[p1Id];
+
+            // 仕様03-1.3: 累積履歴への対称記録
+            this.matchHistory[p1Id][targetGhostSourceId] = (this.matchHistory[p1Id][targetGhostSourceId] || 0) + 1;
+            if (this.players[targetGhostSourceId]) {
+                if (!this.matchHistory[targetGhostSourceId]) this.matchHistory[targetGhostSourceId] = {};
+                this.matchHistory[targetGhostSourceId][p1Id] = (this.matchHistory[targetGhostSourceId][p1Id] || 0) + 1;
+            }
+        } else {
+            // 生身同士の対人戦
+            this.matchHistory[p1Id][p2Id] = (this.matchHistory[p1Id][p2Id] || 0) + 1;
+            if (this.players[p2Id]) {
+                if (!this.matchHistory[p2Id]) this.matchHistory[p2Id] = {};
+                this.matchHistory[p2Id][p1Id] = (this.matchHistory[p2Id][p1Id] || 0) + 1;
+            }
+
+            // 直前に対人戦を行った相手として相互に記録
+            this.lastPvPOpponents[p1Id] = p2Id;
+            this.lastPvPOpponents[p2Id] = p1Id;
+
+            // 影戦フラグの解除
+            this.lastRoundGhostFighters.delete(p1Id);
+            this.lastRoundGhostFighters.delete(p2Id);
+            delete this.lastGhostSources[p1Id];
+            delete this.lastGhostSources[p2Id];
         }
     }
 
@@ -261,6 +339,11 @@ class GameManager {
         this.gameOverDecided = false;
         this.finalOutcome = null;
         this.battleParticipants.clear();
+
+        this.ghostMatchCounts = {};
+        this.lastPvPOpponents = {};
+        this.lastRoundGhostFighters.clear();
+        this.lastGhostSources = {};
 
         const entered = Object.values(this.players).filter(p => p.isEntered);
         entered.forEach(p => {
@@ -279,6 +362,7 @@ class GameManager {
             p.purchasedMarketUids.clear();
 
             this.matchHistory[p.id] = {};
+            this.ghostMatchCounts[p.id] = 0;
 
             p.initRoundShop(1);
 

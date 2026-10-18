@@ -1,6 +1,6 @@
 /**
  * src/server/battleEngine.js
- * 戦闘計算・マッチング・シミュレーションモジュール (完全改修版)
+ * 戦闘計算・マッチング・シミュレーションモジュール (完全均等マッチング版)
  */
 
 const {
@@ -97,7 +97,6 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         p2Remaining: Math.max(0, p2TotalCount - (p2Index + p2Offset))
     });
 
-    // 両者出撃0枚の場合：両者敗北
     if (p1CombatTeam.length === 0 && p2CombatTeam.length === 0) {
         logs.push({ text: '両プレイヤーともカードが出撃していません。両者敗北！', damage: 0, counts: getCountsMeta() });
         return {
@@ -109,7 +108,6 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         };
     }
 
-    // p1が0枚、p2が1枚以上の場合（p2の第1カードをstateとcombatPairsに保持）
     if (p1CombatTeam.length === 0) {
         const p2FirstCard = JSON.parse(JSON.stringify(p2CombatTeam[0]));
         logs.push({
@@ -133,7 +131,6 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
         };
     }
 
-    // p2が0枚、p1が1枚以上の場合（p1の第1カードをstateとcombatPairsに保持）
     if (p2CombatTeam.length === 0) {
         const p1FirstCard = JSON.parse(JSON.stringify(p1CombatTeam[0]));
         logs.push({
@@ -273,7 +270,6 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             const faintedSide = attackerIsP1 ? 'p2' : 'p1';
             currentPair.faintedSide = faintedSide;
 
-            // 倒れた瞬間のログで即座に残存カード数を1減らす (L-2修正)
             const faintedCounts = attackerIsP1 ? getCountsMeta(0, 1) : getCountsMeta(1, 0);
 
             logs.push({
@@ -393,9 +389,12 @@ function getMatchCount(matchHistory, idA, idB) {
 }
 
 /**
- * Fisher-Yates シャッフルおよび全組み合わせ最小コスト探索によるマッチング (M-2改修)
+ * 3層ハイブリッド評価関数による完全均等マッチングアルゴリズム
+ * @param {Array} activePlayers - 生存・参加中のプレイヤー一覧
+ * @param {Object} matchHistory - 相互の対戦回数履歴
+ * @param {Object} matchMetadata - { ghostMatchCounts, lastPvPOpponents, lastRoundGhostFighters, lastGhostSources }
  */
-function createRoundMatchups(activePlayers, matchHistory = {}) {
+function createRoundMatchups(activePlayers, matchHistory = {}, matchMetadata = {}) {
     const matchups = {};
     if (!activePlayers || activePlayers.length === 0) return matchups;
 
@@ -410,6 +409,11 @@ function createRoundMatchups(activePlayers, matchHistory = {}) {
         return matchups;
     }
 
+    const ghostMatchCounts = matchMetadata.ghostMatchCounts || {};
+    const lastPvPOpponents = matchMetadata.lastPvPOpponents || {};
+    const lastRoundGhostFighters = matchMetadata.lastRoundGhostFighters || new Set();
+    const lastGhostSources = matchMetadata.lastGhostSources || {};
+
     // ランダム性を担保するための初期シャッフル
     const pool = [...activePlayers];
     for (let i = pool.length - 1; i > 0; i--) {
@@ -419,11 +423,63 @@ function createRoundMatchups(activePlayers, matchHistory = {}) {
 
     const n = pool.length;
 
-    function getCost(pA, pB) {
-        return getMatchCount(matchHistory, pA.id, pB.id);
+    /**
+     * 通常対人戦（PvP）のコスト評価
+     * - 基本コスト: 対戦回数 × 100（影戦より大幅に重み付けして対人未対戦を最優先）
+     * - 直前PvPペナルティ: +1000（生身同士で直前に対戦したペアのみを厳格に阻止）
+     */
+    function getPvPCost(pA, pB) {
+        const count = getMatchCount(matchHistory, pA.id, pB.id);
+        let cost = count * 100;
+
+        // 重要修正: 影戦相手ではなく、直前に「生身同士」で対戦したペアのみにペナルティ
+        if (lastPvPOpponents[pA.id] === pB.id || lastPvPOpponents[pB.id] === pA.id) {
+            cost += 1000;
+        }
+
+        return cost;
     }
 
-    // 偶数プレイヤー群の全ペアリング探索
+    /**
+     * 影戦（PvE）のコスト評価
+     * - 影戦累計回数の差による絶対的ペナルティ: 未消化プレイヤーを強制選出
+     * - 直前ラウンド影戦ペナルティ: +5000（影戦の2連続を確実に防止）
+     * - 影の提供元との対戦回数コスト: 回数 × 10
+     */
+    const minGhostCount = Math.min(...pool.map(p => ghostMatchCounts[p.id] || 0));
+
+    function getGhostCost(oddPlayer, ghostSource) {
+        let cost = 0;
+        const gCount = ghostMatchCounts[oddPlayer.id] || 0;
+
+        // 影戦回数が最小でないプレイヤーには特大ペナルティ（全員均等消化の完全保証）
+        if (gCount > minGhostCount) {
+            cost += (gCount - minGhostCount) * 10000;
+        }
+
+        // 直前ラウンドで影と戦ったプレイヤーには連続影戦ペナルティ
+        if (lastRoundGhostFighters.has(oddPlayer.id)) {
+            cost += 5000;
+        }
+
+        // 影の提供元との過去対戦回数
+        const sourceMatchCount = getMatchCount(matchHistory, oddPlayer.id, ghostSource.id);
+        cost += sourceMatchCount * 10;
+
+        // 直前に対戦した影と同じ相手である場合のペナルティ
+        if (lastGhostSources[oddPlayer.id] === ghostSource.id) {
+            cost += 200;
+        }
+
+        // 直前に生身で対戦した相手の影である場合のペナルティ
+        if (lastPvPOpponents[oddPlayer.id] === ghostSource.id) {
+            cost += 100;
+        }
+
+        return cost;
+    }
+
+    // 偶数プレイヤー群の全ペアリング最適化探索
     function solveEvenPairing(playerList) {
         const m = playerList.length;
         if (m === 0) return { pairs: [], cost: 0 };
@@ -446,7 +502,7 @@ function createRoundMatchups(activePlayers, matchHistory = {}) {
 
             for (let i = 0; i < rest.length; i++) {
                 const second = rest[i];
-                const pairCost = getCost(playerList[first], playerList[second]);
+                const pairCost = getPvPCost(playerList[first], playerList[second]);
                 const nextIndices = rest.filter((_, idx) => idx !== i);
 
                 currentPairs.push([playerList[first], playerList[second]]);
@@ -461,7 +517,7 @@ function createRoundMatchups(activePlayers, matchHistory = {}) {
         return { pairs: bestPairs || [], cost: minCost };
     }
 
-    // 偶数人の場合：全組み合わせから対戦回数の総和最小を探索
+    // 偶数人の場合：全組み合わせから総コスト最小を探索
     if (n % 2 === 0) {
         const result = solveEvenPairing(pool);
         result.pairs.forEach(([p1, p2]) => {
@@ -471,7 +527,7 @@ function createRoundMatchups(activePlayers, matchHistory = {}) {
         return matchups;
     }
 
-    // 奇数人の場合：「影と戦うプレイヤー × 影の提供元」を含めて全探索し総コスト最小を選択
+    // 奇数人の場合：影戦完全均等ローテーション＋生身最適化を含めた全探索
     let bestTotalCost = Infinity;
     let bestOddGhost = null;
     let bestGhostSource = null;
@@ -481,13 +537,13 @@ function createRoundMatchups(activePlayers, matchHistory = {}) {
         const oddPlayer = pool[i];
         const remainingPlayers = pool.filter((_, idx) => idx !== i);
 
-        // 残り偶数人の最小ペアリングを算出
+        // 残り偶数人の対人戦最小コスト解を算出
         const evenSolution = solveEvenPairing(remainingPlayers);
 
-        // oddPlayer に対する影の提供元（未対戦回数が最も少ない相手を優先）
+        // oddPlayer に対する最適な影の提供元を選定
         for (let j = 0; j < remainingPlayers.length; j++) {
             const sourceCandidate = remainingPlayers[j];
-            const ghostCost = getCost(oddPlayer, sourceCandidate);
+            const ghostCost = getGhostCost(oddPlayer, sourceCandidate);
             const totalCost = evenSolution.cost + ghostCost;
 
             if (totalCost < bestTotalCost) {
