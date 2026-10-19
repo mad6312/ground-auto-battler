@@ -1,7 +1,7 @@
 /**
  * public/js/cardUI.js
  * カードUIコンポーネント生成および表示制御モジュール
- * (無限読み込み安全遮断・枠線クリップ根絶・高画質レンダリング・日英2行表示完全版)
+ * (無限読み込み安全遮断・枠線クリップ根絶・高画質レンダリング・日英独立適正リサイズ完全版)
  */
 
 import { state, dom, socket, escapeHtml } from './state.js';
@@ -379,7 +379,6 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
         if (e.button !== 0) return;
         if (cardElement.dataset.nonDraggable === 'true') return;
 
-        // 要望5: イラスト部分も含め、すべての領域で通常どおりカードUIカスタムドラッグを発火させる
         if (activeDragSession) {
             endCurrentDrag(e, false);
         }
@@ -431,7 +430,7 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
 }
 
 /**
- * カードDOM生成 (高精細レンダリング・安全フォールバック対応・日英2行表示)
+ * カードDOM生成 (高精細レンダリング・安全フォールバック対応・日英独立適正リサイズ)
  */
 export function createCardElement(card, options = {}) {
     const div = document.createElement('div');
@@ -470,13 +469,29 @@ export function createCardElement(card, options = {}) {
         tribeClass += ' race-long';
     }
 
-    // 要望6: 日本語・英語表記の分離パース
+    // 修正要件2: 日本語・英語の独立適正リサイズ判定
     const nameParts = splitCardName(card.name);
-    let nameClass = '';
-    if (nameParts.ja.length >= 14 || nameParts.en.length >= 26) {
-        nameClass = 'name-very-long';
-    } else if (nameParts.ja.length >= 9 || nameParts.en.length >= 18) {
-        nameClass = 'name-long';
+    const jaLen = nameParts.ja.length;
+    const enLen = nameParts.en.length;
+
+    // 日本語側の個別縮小クラス判定 (内幅116pxに対し約10〜11文字までは基本サイズで余裕あり)
+    let jaClass = '';
+    if (jaLen >= 18) {
+        jaClass = 'ja-ultra-long';
+    } else if (jaLen >= 15) {
+        jaClass = 'ja-very-long';
+    } else if (jaLen >= 12) {
+        jaClass = 'ja-long';
+    }
+
+    // 英語側の個別縮小クラス判定 (プロポーショナル文字幅を考慮し、24文字までは基本サイズを維持)
+    let enClass = '';
+    if (enLen >= 36) {
+        enClass = 'en-ultra-long';
+    } else if (enLen >= 30) {
+        enClass = 'en-very-long';
+    } else if (enLen >= 25) {
+        enClass = 'en-long';
     }
 
     const shouldApplyBuff = (
@@ -501,7 +516,7 @@ export function createCardElement(card, options = {}) {
       <div class="${tribeClass}">${card.tribe}</div>
     </div>
 
-    <!-- ② イラスト領域（要望5: ブラウザ標準の画像ドラッグを完全阻止） -->
+    <!-- ② イラスト領域 -->
     <div class="card-art-container">
       <img class="card-art-image" src="${primarySrc}" alt="${escapeHtml(nameParts.ja)}"
            draggable="false" ondragstart="return false;"
@@ -515,10 +530,10 @@ export function createCardElement(card, options = {}) {
       </div>
     </div>
 
-    <!-- ③ カード名プレート (要望6: 1行目日本語・2行目英語・文字サイズ比率2:1・中央揃え) -->
-    <div class="card-name-bar ${nameClass}">
-      <span class="card-name-ja">${escapeHtml(nameParts.ja)}</span>
-      ${nameParts.en ? `<span class="card-name-en">${escapeHtml(nameParts.en)}</span>` : ''}
+    <!-- ③ カード名プレート (日本語・英語の独立フォント制御・はみ出し時のみ縮小) -->
+    <div class="card-name-bar">
+      <span class="card-name-ja ${jaClass}">${escapeHtml(nameParts.ja)}</span>
+      ${nameParts.en ? `<span class="card-name-en ${enClass}">${escapeHtml(nameParts.en)}</span>` : ''}
     </div>
 
     <!-- ④ 最下部スタッツバー (❤ ⚔ ⚡：数値のみ緑色) -->
@@ -613,7 +628,6 @@ export function renderShop() {
         });
         slotWrapper.appendChild(cardEl);
 
-        // カード直下（外側）に中央揃えで配置される価格ラベル
         const costLabel = document.createElement('div');
         costLabel.className = 'card-below-cost';
         costLabel.innerHTML = `<span class="gold-coin-symbol">🟡</span> ${slot.card.cost}G`;
@@ -650,12 +664,10 @@ export function renderMarketCards() {
         });
         slotWrapper.appendChild(cardEl);
 
-        // マスター仕様に従った解雇市場購入価格計算式: floor(通常価格 * ★ / 2)
         const baseCost = RARITY_COSTS[item.card.rarity] || item.card.cost || 2;
         const stars = item.card.starCount || 1;
         const marketPrice = Math.floor((baseCost * stars) / 2);
 
-        // カード直下（外側）に中央揃えで配置される価格ラベル
         const costLabel = document.createElement('div');
         costLabel.className = 'card-below-cost';
         costLabel.innerHTML = `<span class="gold-coin-symbol">🟡</span> ${marketPrice}G`;

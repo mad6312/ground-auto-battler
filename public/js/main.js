@@ -1,7 +1,7 @@
 /**
  * public/js/main.js
  * クライアント側メインエントリーモジュール
- * (ショップ上部ゴールド・解雇市場リロール非活性・下部ドロップ購入拡張完全版)
+ * (対戦相手UI動的伸縮・手札接触防止スクロール・ショップ一体化ゴールド完全版)
  */
 
 import {
@@ -49,6 +49,44 @@ const hudDashboardCluster = document.getElementById('hud-dashboard-cluster');
 const roundIndicatorBox = document.getElementById('round-indicator-box');
 const hudPlayerStats = document.getElementById('hud-player-stats');
 const hudOpponentSection = document.getElementById('hud-opponent-section');
+
+// 修正要件1 & 3: 対戦相手一覧UIの動的伸縮・横方向干渉回避・手札UI接触時ストップ制御
+function adjustWorkspaceLayoutForSidebar() {
+    const sidebar = document.getElementById('opponents-sidebar');
+    const workspace = document.getElementById('game-main-workspace');
+    const handWrapper = document.getElementById('hand-section-wrapper');
+    if (!sidebar || !workspace || dom.viewGame.classList.contains('hidden')) return;
+
+    // ① 横方向の接触干渉防止制御（接触しそうな時だけ中央UIを右へ退避）
+    const sidebarRect = sidebar.getBoundingClientRect();
+    const sidebarRight = sidebarRect.right;
+
+    const baseContentWidth = 840;
+    const windowWidth = window.innerWidth;
+    const idealLeft = (windowWidth - baseContentWidth) / 2;
+    const safeGap = 16;
+
+    if (sidebarRight + safeGap > idealLeft) {
+        const shiftX = (sidebarRight + safeGap) - idealLeft;
+        workspace.style.transform = `translateX(${Math.max(0, shiftX)}px)`;
+    } else {
+        workspace.style.transform = 'none';
+    }
+
+    // ② 修正要件3: 縦方向の動的伸縮・手札UI接触防止制御
+    if (handWrapper) {
+        const handRect = handWrapper.getBoundingClientRect();
+        const sidebarTop = sidebarRect.top;
+        const verticalSafeMargin = 16; // 手札UIとの安全余白
+        const availableHeight = handRect.top - sidebarTop - verticalSafeMargin;
+
+        if (availableHeight > 100) {
+            sidebar.style.maxHeight = `${availableHeight}px`;
+        }
+    }
+}
+
+window.addEventListener('resize', adjustWorkspaceLayoutForSidebar);
 
 function syncLineupChanges() {
     const lineupUids = [
@@ -109,14 +147,13 @@ function showOverhandDiscardModal() {
 }
 
 /**
- * 画面左側サイドバー：対戦相手プレイヤー縦並びリストのレンダリング
+ * 画面左側サイドバー：対戦相手プレイヤー縦並びリストのレンダリング (人数に応じた動的伸縮対応)
  */
 function renderOpponentsBar() {
     dom.opponentsBar.innerHTML = '';
     const enteredPlayers = state.cachedOpponentsList.filter(p => p.isEntered);
 
     enteredPlayers.forEach(p => {
-        // 事前ネタバレ防止：リザルトで「次へ」を押すまでバトル中の最新ライフ変化を隠蔽
         const showMaskedLife = (state.currentGameState === 'battle' && !state.hasClickedNextInBattle);
         const effectiveLife = showMaskedLife
             ? (state.displayedLifeMap.has(p.id) ? state.displayedLifeMap.get(p.id) : p.life)
@@ -240,6 +277,9 @@ function renderOpponentsBar() {
 
         dom.opponentsBar.appendChild(card);
     });
+
+    // サイドバー更新後のサイズ・接触干渉判定を即時再計算
+    requestAnimationFrame(adjustWorkspaceLayoutForSidebar);
 }
 
 // 各ラウンド開始時ポップアップ演出および配布アニメーション順序保証
@@ -304,7 +344,7 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
         return;
     }
 
-    // ② 出撃スロットへのドロップ (ショップ/市場からの直接配置対応)
+    // ② 出撃スロットへのドロップ
     const deploySlot = dropTarget ? dropTarget.closest('.deploy-slot') : null;
     if (deploySlot) {
         const slotIndex = parseInt(deploySlot.dataset.slot, 10);
@@ -354,7 +394,6 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
             return;
         }
 
-        // 手札カード同士のドラッグのみ合成を実行
         if (dragData.type === 'hand') {
             socket.emit('card:synthesizeEx', {
                 baseUid: targetCard.uid,
@@ -363,7 +402,6 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
             return;
         }
 
-        // ショップ／市場からのドラッグ時は手札カード上に重ねても合成せず、手札への通常購入処理とする
         if (dragData.type === 'shop') {
             state.pendingHandDropAnim = { x: dropPoint.x, y: dropPoint.y };
             setTimeout(() => { state.pendingHandDropAnim = null; }, 3000);
@@ -377,15 +415,14 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
         }
     }
 
-    // ④ 手札コンテナ領域全体、および「手札UIより下側の領域」へのドロップ（要望10: ドロップ購入範囲の拡張）
+    // ④ 手札コンテナ領域全体、および手札UI下部領域へのドロップ
     const handWrapper = document.getElementById('hand-section-wrapper');
     const handArea = dropTarget ? dropTarget.closest('#player-hand, .hand-section-wrapper, .hand-container-horizontal-scroll') : null;
 
     let isHandOrBelow = !!handArea;
     if (!isHandOrBelow && handWrapper) {
         const hRect = handWrapper.getBoundingClientRect();
-        // 手札UIの上端より下で、かつ画面の左右幅の中央付近（左右40px以上の内側）なら手札ドロップと判定
-        if (clientY >= hRect.top && clientX >= 20 && clientX <= window.innerWidth - 20) {
+        if (clientY >= hRect.top && clientX >= 10 && clientX <= window.innerWidth - 10) {
             isHandOrBelow = true;
         }
     }
@@ -449,7 +486,6 @@ socket.on('lobby:update', (data) => {
 
     dom.lobbyEntryCount.textContent = data.enteredCount;
 
-    // ロビー画面では左上HUDクラスターを完全非表示化
     if (state.currentGameState === 'lobby') {
         if (hudDashboardCluster) hudDashboardCluster.classList.add('hidden');
         if (roundIndicatorBox) roundIndicatorBox.classList.add('hidden');
@@ -561,7 +597,6 @@ socket.on('game:sync', (data) => {
     dom.viewLobby.classList.add('hidden');
     dom.viewGame.classList.remove('hidden');
 
-    // ゲーム画面では左上HUDクラスターを表示
     if (hudDashboardCluster) hudDashboardCluster.classList.remove('hidden');
     dom.roundIndicator.textContent = state.currentRound;
     if (roundIndicatorBox) roundIndicatorBox.classList.remove('hidden');
@@ -794,7 +829,6 @@ dom.tipTabSynth.onclick = () => {
     dom.tipContentTribe.classList.add('hidden');
 };
 
-// 要望4: タブ切り替えとリロールボタンの活性/非活性連動
 dom.tabShop.onclick = () => {
     dom.tabShop.classList.add('active');
     dom.tabMarket.classList.remove('active');
@@ -813,7 +847,6 @@ dom.tabMarket.onclick = () => {
     dom.marketPanel.classList.remove('hidden');
     dom.shopPanel.classList.add('hidden');
 
-    // 要望4: 解雇市場表示中はリロールボタンを非活性化
     dom.btnReroll.disabled = true;
 };
 

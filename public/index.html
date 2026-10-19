@@ -26,7 +26,7 @@
                 <span id="round-indicator" class="hud-round-val">1</span>
             </div>
 
-            <!-- ② プレイヤー情報 (名前・ライフ) ※所持ゴールドはショップ上部へ移動 -->
+            <!-- ② プレイヤー情報 (名前・ライフ) -->
             <div id="hud-player-stats" class="hud-player-section hidden">
                 <div class="hud-player-row-top">
                     <span id="player-name-display" class="hud-player-name">プレイヤー名</span>
@@ -51,7 +51,7 @@
             </div>
         </div>
 
-        <!-- 右上アクションボタン (Tips・設定) -->
+        <!-- 右上アクションボタン (Tips・設定：ロビー画面でも常に画面右上に確実に固定) -->
         <div class="hud-right-group">
             <button id="btn-open-tips" class="btn btn-hud"><span class="btn-icon">💡</span> Tips</button>
             <button id="btn-open-settings" class="btn btn-hud"><span class="btn-icon">⚙</span> 設定</button>
@@ -90,7 +90,7 @@
     <!-- ================= 2. メインゲーム画面 ================= -->
     <main id="view-game" class="view-section game-layout hidden">
 
-        <!-- 【画面左側】：相手プレイヤー縦並びサイドバー -->
+        <!-- 【画面左側】：相手プレイヤー縦並びサイドバー (他UIを不必要にずらさない独立枠・動的伸縮) -->
         <aside id="opponents-sidebar" class="opponents-sidebar-panel glass-panel">
             <div class="sidebar-header">
                 <span class="sidebar-title">対戦相手一覧</span>
@@ -100,23 +100,28 @@
             </div>
         </aside>
 
-        <!-- 【画面中央・右側メイン作業領域】：最小限サイズフィット ＆ 背景見通し重視 -->
-        <section class="game-main-workspace">
+        <!-- 【画面中央】：メイン作業領域 (画面中央配置・接触時スマート退避) -->
+        <section id="game-main-workspace" class="game-main-workspace">
 
-            <!-- 上段：ショップ / 解雇市場 (固定サイズ枠維持 ＆ 上部中央ゴールド表示 ＆ 下部中央リロール) -->
+            <!-- 上段：ショップ / 解雇市場 (所持ゴールド台形タブを上部フレームと完全一体化) -->
             <div id="center-board" class="center-board-panel glass-panel">
-                <!-- ショップUI上部の中央揃え所持ゴールド表示 (タブの上部・無駄な余白なし) -->
-                <div class="shop-gold-display-wrapper">
-                    <div class="shop-gold-badge">
-                        <span class="gold-coin-symbol">🟡</span>
-                        <span id="player-gold-display" class="shop-gold-val">20G</span>
-                    </div>
+                <!-- ショップUI上部に直接一体化した所持ゴールド台形タブ (左右の余分な横長スペースなし) -->
+                <div class="shop-gold-trapezoid">
+                    <span class="gold-coin-symbol">🟡</span>
+                    <span id="player-gold-display" class="shop-gold-val">20G</span>
                 </div>
 
+                <!-- タブ行 ＆ 右端リロールボタン（同じ行に配置） -->
                 <div class="market-top-bar">
                     <div class="tab-controls">
                         <button id="tab-shop" class="tab-btn active">ショップ</button>
                         <button id="tab-market" class="tab-btn disabled-tab" disabled>解雇市場 (R2～)</button>
+                    </div>
+                    <!-- リロールボタン（ショップUI右上・タブと同列配置） -->
+                    <div class="shop-reroll-container">
+                        <button id="btn-reroll" class="btn warning btn-reroll">
+                            <span class="reroll-icon">↺</span> リロール (2G)
+                        </button>
                     </div>
                 </div>
 
@@ -129,16 +134,9 @@
                 <div id="market-panel" class="market-panel-content hidden">
                     <div id="market-cards" class="card-grid market-scroll-grid"></div>
                 </div>
-
-                <!-- リロールボタン (ショップカード群の下部・中央揃え・下部余白確保) -->
-                <div class="shop-bottom-bar">
-                    <button id="btn-reroll" class="btn warning btn-reroll">
-                        <span class="reroll-icon">↺</span> リロール (2G)
-                    </button>
-                </div>
             </div>
 
-            <!-- 中段：出撃スロット（内蔵完了ボタン付き） ＆ コンパクト解雇エリア -->
+            <!-- 中段：出撃スロット（内蔵完了ボタン付き） ＆ 正方形解雇エリア -->
             <div id="tactics-panel" class="tactics-panel-row">
                 <!-- 出撃スロット（3枠 ＋ 3枠目右側に大型完了ボタンを内蔵） -->
                 <div class="deployment-box glass-panel">
@@ -166,7 +164,7 @@
                     </div>
                 </div>
 
-                <!-- 正方形解雇エリア (上部売却テキスト削除・内部売却テキスト維持) -->
+                <!-- 正方形解雇エリア (上部売却テキストなし・1:1正方形維持) -->
                 <div class="discard-box-wrapper glass-panel">
                     <div id="discard-dropzone" class="discard-box" title="手札カードをドロップして売却">
                         <div class="discard-icon">🗑</div>
@@ -176,7 +174,7 @@
                 </div>
             </div>
 
-            <!-- 下段：手札エリア (視認性を重視した水平並び展開) -->
+            <!-- 下段：手札エリア (画面左右端付近まで横幅を最大拡張した広大スペース) -->
             <div id="hand-section-wrapper" class="hand-section-wrapper glass-panel">
                 <div class="hand-meta-bar">
                     <span>所持手札 (右クリックで空き枠へ出撃 / 同種族・同レアリティを重ねて合成)</span>
@@ -268,8 +266,9 @@
                 </div>
             </div>
 
+            <!-- 次へボタン（横幅1.5倍に拡大） -->
             <div class="modal-actions result-modal-footer">
-                <button id="btn-result-next" class="btn primary large">次へ</button>
+                <button id="btn-result-next" class="btn primary large btn-result-next-wide">次へ</button>
             </div>
         </div>
     </div>
@@ -488,7 +487,7 @@
                                 </div>
                                 <div class="card-art-container">
                                     <img class="card-art-image" src="/assets/cards/fire_elf_1.webp" alt="焔刃のエルフ"
-                                        draggable="false"
+                                        draggable="false" ondragstart="return false;"
                                         onerror="if(!this.dataset.tried){this.dataset.tried='true';this.src='/images/cards/fire_elf_1.webp';}else{this.onerror=null;this.style.display='none';}" />
                                     <div class="card-art-overlay">
                                         <span class="badge-star-pill">★1</span>
@@ -526,7 +525,7 @@
                                 </div>
                                 <div class="card-art-container">
                                     <img class="card-art-image" src="/assets/cards/ice_elf_1.webp" alt="霜精のエルフ"
-                                        draggable="false"
+                                        draggable="false" ondragstart="return false;"
                                         onerror="if(!this.dataset.tried){this.dataset.tried='true';this.src='/images/cards/ice_elf_1.webp';}else{this.onerror=null;this.style.display='none';}" />
                                     <div class="card-art-overlay">
                                         <span class="badge-star-pill">★1</span>
@@ -564,7 +563,7 @@
                                 </div>
                                 <div class="card-art-container">
                                     <img class="card-art-image" src="/assets/cards/fire_elf_1.webp" alt="焔刃のエルフ"
-                                        draggable="false"
+                                        draggable="false" ondragstart="return false;"
                                         onerror="if(!this.dataset.tried){this.dataset.tried='true';this.src='/images/cards/fire_elf_1.webp';}else{this.onerror=null;this.style.display='none';}" />
                                     <div class="card-art-overlay">
                                         <span class="badge-star-pill">★2</span>
