@@ -1,6 +1,7 @@
 /**
  * public/js/cardUI.js
- * カードUIコンポーネント生成および表示制御モジュール (完全改修版 v2)
+ * カードUIコンポーネント生成および表示制御モジュール
+ * (無限読み込み安全遮断・枠線クリップ根絶・高画質レンダリング・日英2行表示完全版)
  */
 
 import { state, dom, socket, escapeHtml } from './state.js';
@@ -26,12 +27,34 @@ const RARITY_ORDER = { common: 1, uncommon: 2, rare: 3, epic: 4, legend: 5 };
 const TRIBE_ORDER = { 'ドワーフ': 1, 'ドラゴン': 2, 'エルフ': 3, 'オーク': 4, 'ヴァンパイア': 5, 'リザードマン': 6 };
 const ELEMENT_ORDER = { '火': 1, '氷': 2, '風': 3, '雷': 4, '水': 5, '地': 6 };
 
-// N-9: 飛翔移動中のカードUIDを参照カウント管理（同一カードの連続操作での残像防止）
-const activeFlightCounts = new Map();
+// 高品質属性シンボルマーク (インラインSVG)
+export const ELEMENT_ICONS = {
+    '火': `<svg viewBox="0 0 24 24"><path d="M12 2C9.5 6 6 8.5 6 13a6 6 0 0 0 12 0c0-4-3-6.5-6-11zm0 15a3 3 0 0 1-3-3c0-1.8 1.5-3 3-5 1.5 2 3 3.2 3 5a3 3 0 0 1-3 3z"/></svg>`,
+    '氷': `<svg viewBox="0 0 24 24"><path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>`,
+    '風': `<svg viewBox="0 0 24 24"><path d="M4 8h11a3 3 0 1 0-3-3M2 13h15a3 3 0 1 1-3 3M6 18h8a2 2 0 1 0-2-2" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>`,
+    '雷': `<svg viewBox="0 0 24 24"><path d="M13 2L3 14h7l-2 8 11-13h-7l2-7z"/></svg>`,
+    '水': `<svg viewBox="0 0 24 24"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>`,
+    '地': `<svg viewBox="0 0 24 24"><path d="M12 3l9 6-3 12H6L3 9zm0 4.5L6.5 10l1.8 7.5h7.4l1.8-7.5z"/></svg>`
+};
 
-// 現在マウスホバーまたはドラッグされているカード情報
+const activeFlightCounts = new Map();
 let currentHoveredCard = null;
 let currentHoveredArea = null;
+
+/**
+ * カード名（"日本語名 (英語名)"）を日本語と英語（括弧なし）に分離する
+ */
+export function splitCardName(fullName) {
+    if (!fullName) return { ja: '', en: '' };
+    const match = fullName.match(/^(.*?)(?:\s*\((.*?)\))?$/);
+    if (match) {
+        return {
+            ja: (match[1] || '').trim(),
+            en: (match[2] || '').trim()
+        };
+    }
+    return { ja: fullName.trim(), en: '' };
+}
 
 export function sortHandCards(cards) {
     return [...cards].sort((a, b) => {
@@ -96,25 +119,6 @@ export function getBuffedStats(card, shouldBuff = false) {
     return { hp, atk, spd, isHpBuffed, isAtkBuffed, isSpdBuffed };
 }
 
-/**
- * 画面内の手札・ショップ・市場・出撃枠に同レア・同種族の合成相手が存在するか判定
- */
-export function hasSynthesizablePartner(card) {
-    if (!card) return false;
-    const validSelector = '#player-hand .card-item, #shop-cards .card-item, #market-cards .card-item, .slots-container .card-item';
-    const elements = document.querySelectorAll(validSelector);
-    for (const el of elements) {
-        const d = el.__cardData;
-        if (d && d.uid !== card.uid && d.rarity === card.rarity && d.tribe === card.tribe) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * 同レアリティ・同種族カードの強調アニメーション適用
- */
 export function highlightSynthesizableCards(sourceCard, sourceArea) {
     if (!sourceCard) return;
     const allowedAreas = ['shop', 'market', 'deploy', 'hand'];
@@ -138,7 +142,6 @@ export function highlightSynthesizableCards(sourceCard, sourceArea) {
     });
 }
 
-// N-7: 強調解除時にホバー状態も確実にリセット
 export function clearSynthesizableHighlights() {
     currentHoveredCard = null;
     currentHoveredArea = null;
@@ -147,9 +150,6 @@ export function clearSynthesizableHighlights() {
     });
 }
 
-/**
- * N-6 / N-9: カード飛翔アニメーション (cardオブジェクト/uid文字列の完全両立と参照カウント管理)
- */
 export function animateCardFlight(startRect, targetElement, cardOrUid = null, onComplete = null) {
     if (!startRect || !targetElement) {
         if (onComplete) onComplete();
@@ -177,6 +177,7 @@ export function animateCardFlight(startRect, targetElement, cardOrUid = null, on
     const ghost = targetElement.cloneNode(true);
     ghost.classList.add('floating-flight-card');
     ghost.classList.remove('card-synth-highlight');
+    ghost.classList.remove('card-synth-success');
 
     if (cardObj) {
         ghost.__cardData = cardObj;
@@ -260,7 +261,7 @@ function updateDropzoneHighlight(dropTarget) {
     }
     if (!dropTarget) return;
 
-    const zone = dropTarget.closest('.deploy-slot .slot-dropzone, #discard-dropzone');
+    const zone = dropTarget.closest('.deploy-slot .slot-dropzone, #discard-dropzone, .discard-box');
     if (zone) {
         zone.classList.add('drag-over');
         currentHighlightedDropzone = zone;
@@ -314,10 +315,13 @@ window.addEventListener('pointermove', (e) => {
         s.hasStartedDrag = true;
         if (s.clearTapTimer) s.clearTapTimer();
 
+        s.sourceElement.classList.remove('card-synth-success');
+
         const rect = s.sourceElement.getBoundingClientRect();
 
         const ghost = s.sourceElement.cloneNode(true);
         ghost.classList.add('custom-drag-ghost');
+        ghost.classList.remove('card-synth-success');
         ghost.style.width = `${rect.width}px`;
         ghost.style.height = `${rect.height}px`;
         ghost.style.left = `${e.clientX - (s.startX - rect.left)}px`;
@@ -359,7 +363,6 @@ window.addEventListener('blur', () => {
     }
 });
 
-// N-8: タッチ操作とPCマウス操作の厳格分離（タッチ時のcontextmenu二重発火を完全排除）
 function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
     let longTapTimer = null;
     let isTouchActive = false;
@@ -376,6 +379,7 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
         if (e.button !== 0) return;
         if (cardElement.dataset.nonDraggable === 'true') return;
 
+        // 要望5: イラスト部分も含め、すべての領域で通常どおりカードUIカスタムドラッグを発火させる
         if (activeDragSession) {
             endCurrentDrag(e, false);
         }
@@ -415,7 +419,6 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
     cardElement.addEventListener('pointerup', clearTap);
     cardElement.addEventListener('pointercancel', clearTap);
 
-    // N-8: タッチ起点の際は contextmenu を無視してタイマー側のみで確実に1回実行。PCマウスはディレイなく即実行。
     if (onContextMenu) {
         cardElement.addEventListener('contextmenu', (e) => {
             e.preventDefault();
@@ -428,7 +431,7 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
 }
 
 /**
- * カードDOM生成
+ * カードDOM生成 (高精細レンダリング・安全フォールバック対応・日英2行表示)
  */
 export function createCardElement(card, options = {}) {
     const div = document.createElement('div');
@@ -441,35 +444,39 @@ export function createCardElement(card, options = {}) {
         div.style.opacity = '0';
     }
 
-    let costHtml = '';
-    if (options.isShop) {
-        costHtml = `<span class="card-cost">${card.cost}G</span>`;
-    } else if (options.isMarket) {
-        const baseCost = RARITY_COSTS[card.rarity] || card.cost || 2;
-        const stars = card.starCount || 1;
-        const marketPrice = Math.floor((baseCost * stars) / 2);
-        costHtml = `<span class="card-cost">${marketPrice}G</span>`;
-    }
-
+    const elemSvg = ELEMENT_ICONS[card.element] || '';
     const starCount = card.starCount || 1;
-    const starBadgeHtml = `<span class="badge-star" title="★評価">★${starCount}</span>`;
+    const starOverlayHtml = `<span class="badge-star-pill" title="★評価">★${starCount}</span>`;
 
-    let kaiBadgeHtml = '';
+    let kaiOverlayHtml = '';
     if (card.isMarketCard || options.isMarket) {
         const rawSeller = options.sellerName || card.sellerName || '他プレイヤー';
         const seller = escapeHtml(rawSeller);
-        kaiBadgeHtml = `
-      <span class="badge-market-kai">解
+        kaiOverlayHtml = `
+      <span class="badge-kai-pill">解
         <div class="kai-balloon">解雇者：${seller}</div>
       </span>
     `;
     }
 
-    let nameClass = 'card-name';
-    if (card.name.length >= 26) {
-        nameClass += ' name-very-long';
-    } else if (card.name.length >= 17) {
-        nameClass += ' name-long';
+    const artId = card.masterId || card.uid || card.id || 'default';
+    const primarySrc = `/images/cards/${artId}.webp`;
+    const fallbackSrc = `/assets/cards/${artId}.webp`;
+
+    let tribeClass = 'card-race-title';
+    if (card.tribe.length >= 6) {
+        tribeClass += ' race-very-long';
+    } else if (card.tribe.length >= 4) {
+        tribeClass += ' race-long';
+    }
+
+    // 要望6: 日本語・英語表記の分離パース
+    const nameParts = splitCardName(card.name);
+    let nameClass = '';
+    if (nameParts.ja.length >= 14 || nameParts.en.length >= 26) {
+        nameClass = 'name-very-long';
+    } else if (nameParts.ja.length >= 9 || nameParts.en.length >= 18) {
+        nameClass = 'name-long';
     }
 
     const shouldApplyBuff = (
@@ -481,27 +488,50 @@ export function createCardElement(card, options = {}) {
     );
     const stats = getBuffedStats(card, shouldApplyBuff);
 
-    const hpValClass = stats.isHpBuffed ? 'stat-buffed' : '';
-    const atkValClass = stats.isAtkBuffed ? 'stat-buffed' : '';
-    const spdValClass = stats.isSpdBuffed ? 'stat-buffed' : '';
+    const hpBuffClass = stats.isHpBuffed ? 'stat-buffed' : '';
+    const atkBuffClass = stats.isAtkBuffed ? 'stat-buffed' : '';
+    const spdBuffClass = stats.isSpdBuffed ? 'stat-buffed' : '';
 
     div.innerHTML = `
-    <div class="card-row-meta">
-      <span class="elem-badge elem-${card.element}">${card.element}</span>
-      <span class="card-tribe-name">${card.tribe}</span>
-    </div>
-    <div class="card-row-stats-head">
-      <div class="badge-group-left">
-        ${starBadgeHtml}
-        ${kaiBadgeHtml}
+    <!-- ① 最上部ヘッダー：属性丸アイコン ＆ 中央揃え種族名 -->
+    <div class="card-header-bar">
+      <div class="card-elem-badge elem-${card.element}" title="属性: ${card.element}">
+        ${elemSvg}
       </div>
-      ${costHtml}
+      <div class="${tribeClass}">${card.tribe}</div>
     </div>
-    <div class="${nameClass}">${escapeHtml(card.name)}</div>
-    <div class="card-stats">
-      <span class="stat-hp" title="HP"><span class="stat-icon">❤</span><span class="stat-val ${hpValClass}">${stats.hp}</span></span>
-      <span class="stat-atk" title="攻撃"><span class="stat-icon">⚔</span><span class="stat-val ${atkValClass}">${stats.atk}</span></span>
-      <span class="stat-spd" title="素早さ"><span class="stat-icon">⚡</span><span class="stat-val ${spdValClass}">${stats.spd}</span></span>
+
+    <!-- ② イラスト領域（要望5: ブラウザ標準の画像ドラッグを完全阻止） -->
+    <div class="card-art-container">
+      <img class="card-art-image" src="${primarySrc}" alt="${escapeHtml(nameParts.ja)}"
+           draggable="false" ondragstart="return false;"
+           onerror="if(!this.dataset.triedFallback){ this.dataset.triedFallback='true'; this.src='${fallbackSrc}'; } else { this.onerror=null; this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex'; }" />
+      <div class="card-art-fallback" style="display: none;">
+        ${elemSvg}
+      </div>
+      <div class="card-art-overlay">
+        ${starOverlayHtml}
+        ${kaiOverlayHtml}
+      </div>
+    </div>
+
+    <!-- ③ カード名プレート (要望6: 1行目日本語・2行目英語・文字サイズ比率2:1・中央揃え) -->
+    <div class="card-name-bar ${nameClass}">
+      <span class="card-name-ja">${escapeHtml(nameParts.ja)}</span>
+      ${nameParts.en ? `<span class="card-name-en">${escapeHtml(nameParts.en)}</span>` : ''}
+    </div>
+
+    <!-- ④ 最下部スタッツバー (❤ ⚔ ⚡：数値のみ緑色) -->
+    <div class="card-stats-footer">
+      <div class="stat-unit hp" title="HP">
+        <span class="icon">❤</span><span class="val ${hpBuffClass}">${stats.hp}</span>
+      </div>
+      <div class="stat-unit atk" title="攻撃力">
+        <span class="icon">⚔</span><span class="val ${atkBuffClass}">${stats.atk}</span>
+      </div>
+      <div class="stat-unit spd" title="素早さ">
+        <span class="icon">⚡</span><span class="val ${spdBuffClass}">${stats.spd}</span>
+      </div>
     </div>
   `;
 
@@ -555,20 +585,20 @@ export function updateMarketTabLabel() {
 export function renderShop() {
     dom.shopCardsContainer.innerHTML = '';
     state.localShop.forEach((slot, index) => {
+        const slotWrapper = document.createElement('div');
+        slotWrapper.className = 'market-item-slot';
+
         if (!slot.card) {
             const emptyDiv = document.createElement('div');
-            emptyDiv.className = 'shop-soldout-placeholder';
-            emptyDiv.style.width = '126px';
-            emptyDiv.style.height = '148px';
-            emptyDiv.style.display = 'flex';
-            emptyDiv.style.alignItems = 'center';
-            emptyDiv.style.justifyContent = 'center';
-            emptyDiv.style.border = '2px dashed #475569';
-            emptyDiv.style.borderRadius = '6px';
-            emptyDiv.style.color = '#64748b';
-            emptyDiv.style.fontSize = '0.85rem';
+            emptyDiv.className = 'empty-shop-slot';
             emptyDiv.textContent = '売却済み';
-            dom.shopCardsContainer.appendChild(emptyDiv);
+            slotWrapper.appendChild(emptyDiv);
+
+            const emptyCost = document.createElement('div');
+            emptyCost.className = 'card-below-cost-empty';
+            slotWrapper.appendChild(emptyCost);
+
+            dom.shopCardsContainer.appendChild(slotWrapper);
             return;
         }
 
@@ -581,7 +611,15 @@ export function renderShop() {
                 socket.emit('shop:toggleLock', { shopIndex: index });
             }
         });
-        dom.shopCardsContainer.appendChild(cardEl);
+        slotWrapper.appendChild(cardEl);
+
+        // カード直下（外側）に中央揃えで配置される価格ラベル
+        const costLabel = document.createElement('div');
+        costLabel.className = 'card-below-cost';
+        costLabel.innerHTML = `<span class="gold-coin-symbol">🟡</span> ${slot.card.cost}G`;
+        slotWrapper.appendChild(costLabel);
+
+        dom.shopCardsContainer.appendChild(slotWrapper);
     });
 }
 
@@ -601,16 +639,35 @@ export function renderMarketCards() {
 
     dom.marketCardsContainer.innerHTML = '';
     state.localMarket.forEach((item) => {
+        const slotWrapper = document.createElement('div');
+        slotWrapper.className = 'market-item-slot';
+
         const cardEl = createCardElement(item.card, {
             isMarket: true,
             sellerName: item.sellerName,
             area: 'market',
             dragInfo: { type: 'market', marketCardUid: item.card.uid, card: item.card }
         });
-        dom.marketCardsContainer.appendChild(cardEl);
+        slotWrapper.appendChild(cardEl);
+
+        // マスター仕様に従った解雇市場購入価格計算式: floor(通常価格 * ★ / 2)
+        const baseCost = RARITY_COSTS[item.card.rarity] || item.card.cost || 2;
+        const stars = item.card.starCount || 1;
+        const marketPrice = Math.floor((baseCost * stars) / 2);
+
+        // カード直下（外側）に中央揃えで配置される価格ラベル
+        const costLabel = document.createElement('div');
+        costLabel.className = 'card-below-cost';
+        costLabel.innerHTML = `<span class="gold-coin-symbol">🟡</span> ${marketPrice}G`;
+        slotWrapper.appendChild(costLabel);
+
+        dom.marketCardsContainer.appendChild(slotWrapper);
     });
 }
 
+/**
+ * 手札エリアのレンダリング (視認性重視の水平並び展開)
+ */
 export function renderHand(syncLineupCallback, options = {}) {
     dom.playerHandContainer.innerHTML = '';
 
@@ -653,6 +710,9 @@ export function renderHand(syncLineupCallback, options = {}) {
     });
 }
 
+/**
+ * 繰り出しUIスロットのレンダリング
+ */
 export function renderDeploySlots(syncLineupCallback) {
     dom.deployDropzones.forEach((zone, index) => {
         zone.innerHTML = '';
@@ -660,6 +720,7 @@ export function renderDeploySlots(syncLineupCallback) {
         if (uid) {
             const card = state.localHand.find(c => c && c.uid === uid);
             if (card) {
+                zone.classList.add('has-card');
                 const cardEl = createCardElement(card, {
                     area: 'deploy',
                     dragInfo: { type: 'deploy', slotIndex: index, uid: card.uid },
@@ -680,7 +741,11 @@ export function renderDeploySlots(syncLineupCallback) {
                     }
                 });
                 zone.appendChild(cardEl);
+            } else {
+                zone.classList.remove('has-card');
             }
+        } else {
+            zone.classList.remove('has-card');
         }
     });
 }

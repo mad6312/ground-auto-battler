@@ -1,6 +1,7 @@
 /**
  * public/js/main.js
- * クライアント側メインエントリーモジュール (完全改修版 v3)
+ * クライアント側メインエントリーモジュール
+ * (ショップ上部ゴールド・解雇市場リロール非活性・下部ドロップ購入拡張完全版)
  */
 
 import {
@@ -24,7 +25,8 @@ import {
     clearSynthesizableHighlights,
     animateCardFlight,
     sortHandCards,
-    setCustomDropHandler
+    setCustomDropHandler,
+    ELEMENT_ICONS
 } from './cardUI.js';
 import {
     startBattleAnimation,
@@ -41,6 +43,12 @@ const WEAKNESS_MAP = {
     '水': '雷',
     '地': '水'
 };
+
+// 左上HUDの専用DOM参照
+const hudDashboardCluster = document.getElementById('hud-dashboard-cluster');
+const roundIndicatorBox = document.getElementById('round-indicator-box');
+const hudPlayerStats = document.getElementById('hud-player-stats');
+const hudOpponentSection = document.getElementById('hud-opponent-section');
 
 function syncLineupChanges() {
     const lineupUids = [
@@ -100,11 +108,15 @@ function showOverhandDiscardModal() {
     });
 }
 
+/**
+ * 画面左側サイドバー：対戦相手プレイヤー縦並びリストのレンダリング
+ */
 function renderOpponentsBar() {
     dom.opponentsBar.innerHTML = '';
     const enteredPlayers = state.cachedOpponentsList.filter(p => p.isEntered);
 
     enteredPlayers.forEach(p => {
+        // 事前ネタバレ防止：リザルトで「次へ」を押すまでバトル中の最新ライフ変化を隠蔽
         const showMaskedLife = (state.currentGameState === 'battle' && !state.hasClickedNextInBattle);
         const effectiveLife = showMaskedLife
             ? (state.displayedLifeMap.has(p.id) ? state.displayedLifeMap.get(p.id) : p.life)
@@ -116,11 +128,14 @@ function renderOpponentsBar() {
             state.reservedSpectateTargetId = null;
         }
 
+        // 自分自身のステータス
         if (p.id === state.myId) {
             state.myPlayer = p;
             dom.playerNameDisplay.textContent = p.name;
             dom.playerLifeDisplay.textContent = formatLife(effectiveLife);
-            dom.playerGoldDisplay.textContent = `${p.gold}G`;
+            if (dom.playerGoldDisplay) {
+                dom.playerGoldDisplay.textContent = `${p.gold}G`;
+            }
 
             if (p.isReady || state.hasClickedNextInBattle) {
                 dom.playerReadyLamp.classList.add('ready');
@@ -128,7 +143,6 @@ function renderOpponentsBar() {
                 dom.playerReadyLamp.classList.remove('ready');
             }
 
-            // 要件1: 脱落確定時、完了ボタンおよびリロールボタンを即座に非活性化
             if (!effectiveIsAlive) {
                 dom.btnFinishPrep.disabled = true;
                 dom.btnReroll.disabled = true;
@@ -136,6 +150,7 @@ function renderOpponentsBar() {
             return;
         }
 
+        // 相手プレイヤーカードプレート
         const card = document.createElement('div');
         card.className = `opponent-card ${!effectiveIsAlive ? 'dead' : ''}`;
 
@@ -150,7 +165,7 @@ function renderOpponentsBar() {
             if (state.currentGameState === 'prep') {
                 if (effectiveIsAlive) {
                     const isReserved = state.reservedSpectateTargetId === p.id;
-                    actionBtnHtml = `<button class="btn btn-reserve-spectate ${isReserved ? 'warning' : 'secondary'}">${isReserved ? '予約解除' : '観戦予約'}</button>`;
+                    actionBtnHtml = `<button class="btn btn-reserve-spectate ${isReserved ? 'warning' : 'secondary'}">${isReserved ? '解除' : '予約'}</button>`;
                 }
             } else if (effectiveIsAlive) {
                 actionBtnHtml = `<button class="btn btn-spectate primary">観戦</button>`;
@@ -161,8 +176,8 @@ function renderOpponentsBar() {
 
         card.innerHTML = `
       <div class="opp-header">
-        <span>${escapeHtml(p.name)}</span>
-        <span class="ready-lamp ${p.isReady ? 'ready' : ''}"></span>
+        <span class="opp-name">${escapeHtml(p.name)}</span>
+        <span class="ready-lamp ${p.isReady ? 'ready' : ''}" title="${p.isReady ? '準備完了' : '作戦中'}"></span>
       </div>
       <div class="opp-life-row">
         <span class="opp-life">${formatLife(effectiveLife)}</span>
@@ -196,31 +211,28 @@ function renderOpponentsBar() {
                 dom.historyLineup.innerHTML = '';
                 dom.historyBench.innerHTML = '';
 
-                p.lastRoundInfo.lineup.forEach(c => {
-                    const wrapper = document.createElement('div');
-                    wrapper.className = 'history-card-wrapper';
-                    const weakElem = WEAKNESS_MAP[c.element] || 'なし';
-                    wrapper.innerHTML = `
-            <div class="history-weakness-badge">
-              弱点：<span class="elem-badge elem-${weakElem}">${weakElem}</span>
-            </div>
-          `;
-                    wrapper.appendChild(createCardElement(c, { nonDraggable: true }));
-                    dom.historyLineup.appendChild(wrapper);
-                });
+                const renderHistoryCards = (list, container) => {
+                    list.forEach(c => {
+                        const wrapper = document.createElement('div');
+                        wrapper.className = 'history-card-wrapper';
+                        const weakElem = WEAKNESS_MAP[c.element] || 'なし';
+                        const weakSvg = ELEMENT_ICONS[weakElem] || '';
+                        const iconBadgeHtml = weakSvg
+                            ? `<span class="card-elem-badge elem-${weakElem}" style="position:static; width:18px; height:18px; display:inline-flex;">${weakSvg}</span>`
+                            : weakElem;
 
-                p.lastRoundInfo.bench.forEach(c => {
-                    const wrapper = document.createElement('div');
-                    wrapper.className = 'history-card-wrapper';
-                    const weakElem = WEAKNESS_MAP[c.element] || 'なし';
-                    wrapper.innerHTML = `
-            <div class="history-weakness-badge">
-              弱点：<span class="elem-badge elem-${weakElem}">${weakElem}</span>
-            </div>
-          `;
-                    wrapper.appendChild(createCardElement(c, { nonDraggable: true }));
-                    dom.historyBench.appendChild(wrapper);
-                });
+                        wrapper.innerHTML = `
+                <div class="history-weakness-badge">
+                  弱点：${iconBadgeHtml}
+                </div>
+              `;
+                        wrapper.appendChild(createCardElement(c, { nonDraggable: true }));
+                        container.appendChild(wrapper);
+                    });
+                };
+
+                renderHistoryCards(p.lastRoundInfo.lineup, dom.historyLineup);
+                renderHistoryCards(p.lastRoundInfo.bench, dom.historyBench);
 
                 dom.modalHistory.classList.remove('hidden');
             }
@@ -230,6 +242,7 @@ function renderOpponentsBar() {
     });
 }
 
+// 各ラウンド開始時ポップアップ演出および配布アニメーション順序保証
 function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
     const popup = document.getElementById('round-start-popup');
     const title = document.getElementById('round-popup-title');
@@ -257,7 +270,7 @@ function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
                 const targetRect = targetEl.getBoundingClientRect();
                 const startRect = {
                     left: window.innerWidth / 2 - 62,
-                    top: -160,
+                    top: -180,
                     width: targetRect.width,
                     height: targetRect.height
                 };
@@ -273,12 +286,12 @@ function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
 // カスタムポインタードラッグのドロップ処理
 // ============================
 setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
-    if (!dropTarget || !dragData) return;
+    if (!dragData) return;
 
     const dropPoint = { x: clientX, y: clientY };
 
     // ① 解雇エリアへのドロップ
-    const discardZone = dropTarget.closest('#discard-dropzone');
+    const discardZone = dropTarget ? dropTarget.closest('#discard-dropzone, .discard-box, .discard-box-wrapper') : null;
     if (discardZone) {
         if (dragData.type === 'hand' || dragData.type === 'deploy') {
             socket.emit('card:discard', { cardUid: dragData.card.uid });
@@ -292,7 +305,7 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
     }
 
     // ② 出撃スロットへのドロップ (ショップ/市場からの直接配置対応)
-    const deploySlot = dropTarget.closest('.deploy-slot');
+    const deploySlot = dropTarget ? dropTarget.closest('.deploy-slot') : null;
     if (deploySlot) {
         const slotIndex = parseInt(deploySlot.dataset.slot, 10);
 
@@ -328,8 +341,8 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
         return;
     }
 
-    // ③ 手札カード上へのドロップ（合成または手札との入れ替え）
-    const targetCardEl = dropTarget.closest('.card-item');
+    // ③ 手札カード上へのドロップ (手札カード同士の合成)
+    const targetCardEl = dropTarget ? dropTarget.closest('.card-item') : null;
     if (targetCardEl && targetCardEl.__cardData && targetCardEl.__cardData.uid !== dragData.card.uid) {
         const targetCard = targetCardEl.__cardData;
 
@@ -341,18 +354,43 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
             return;
         }
 
-        if (dragData.type === 'hand' || dragData.type === 'shop' || dragData.type === 'market') {
+        // 手札カード同士のドラッグのみ合成を実行
+        if (dragData.type === 'hand') {
             socket.emit('card:synthesizeEx', {
                 baseUid: targetCard.uid,
                 source: dragData
             });
             return;
         }
+
+        // ショップ／市場からのドラッグ時は手札カード上に重ねても合成せず、手札への通常購入処理とする
+        if (dragData.type === 'shop') {
+            state.pendingHandDropAnim = { x: dropPoint.x, y: dropPoint.y };
+            setTimeout(() => { state.pendingHandDropAnim = null; }, 3000);
+            socket.emit('shop:buy', { shopIndex: dragData.shopIndex });
+            return;
+        } else if (dragData.type === 'market') {
+            state.pendingHandDropAnim = { x: dropPoint.x, y: dropPoint.y };
+            setTimeout(() => { state.pendingHandDropAnim = null; }, 3000);
+            socket.emit('market:buy', { marketCardUid: dragData.marketCardUid });
+            return;
+        }
     }
 
-    // ④ 手札コンテナ領域全体へのドロップ（購入・配置戻し）
-    const handArea = dropTarget.closest('#player-hand') || dropTarget.closest('.hand-wrapper');
-    if (handArea) {
+    // ④ 手札コンテナ領域全体、および「手札UIより下側の領域」へのドロップ（要望10: ドロップ購入範囲の拡張）
+    const handWrapper = document.getElementById('hand-section-wrapper');
+    const handArea = dropTarget ? dropTarget.closest('#player-hand, .hand-section-wrapper, .hand-container-horizontal-scroll') : null;
+
+    let isHandOrBelow = !!handArea;
+    if (!isHandOrBelow && handWrapper) {
+        const hRect = handWrapper.getBoundingClientRect();
+        // 手札UIの上端より下で、かつ画面の左右幅の中央付近（左右40px以上の内側）なら手札ドロップと判定
+        if (clientY >= hRect.top && clientX >= 20 && clientX <= window.innerWidth - 20) {
+            isHandOrBelow = true;
+        }
+    }
+
+    if (isHandOrBelow) {
         if (dragData.type === 'shop') {
             state.pendingHandDropAnim = { x: dropPoint.x, y: dropPoint.y };
             setTimeout(() => { state.pendingHandDropAnim = null; }, 3000);
@@ -392,6 +430,7 @@ socket.on('connect', () => {
         state.currentGameState = 'lobby';
         dom.viewGame.classList.add('hidden');
         dom.viewLobby.classList.remove('hidden');
+        if (hudDashboardCluster) hudDashboardCluster.classList.add('hidden');
     }
 });
 
@@ -400,6 +439,7 @@ socket.on('disconnect', () => {
     state.currentGameState = 'lobby';
     dom.viewGame.classList.add('hidden');
     dom.viewLobby.classList.remove('hidden');
+    if (hudDashboardCluster) hudDashboardCluster.classList.add('hidden');
 });
 
 socket.on('lobby:update', (data) => {
@@ -409,10 +449,14 @@ socket.on('lobby:update', (data) => {
 
     dom.lobbyEntryCount.textContent = data.enteredCount;
 
+    // ロビー画面では左上HUDクラスターを完全非表示化
     if (state.currentGameState === 'lobby') {
-        dom.roundIndicator.classList.add('hidden');
-        dom.nextOpponentIndicator.classList.add('hidden');
+        if (hudDashboardCluster) hudDashboardCluster.classList.add('hidden');
+        if (roundIndicatorBox) roundIndicatorBox.classList.add('hidden');
+        if (hudPlayerStats) hudPlayerStats.classList.add('hidden');
+        if (hudOpponentSection) hudOpponentSection.classList.add('hidden');
         dom.waitAnnouncementBanner.classList.add('hidden');
+
         state.hasClickedNextInBattle = false;
         state.displayedLifeMap.clear();
 
@@ -468,9 +512,9 @@ socket.on('market:sync', (data) => {
 
 socket.on('matchup:notice', ({ opponentName }) => {
     state.currentOpponentName = opponentName;
-    dom.nextOpponentIndicator.textContent = `次の対戦相手: ${state.currentOpponentName}`;
+    dom.nextOpponentIndicator.textContent = state.currentOpponentName;
     if (state.currentGameState === 'prep' && state.myPlayer && state.myPlayer.isAlive) {
-        dom.nextOpponentIndicator.classList.remove('hidden');
+        if (hudOpponentSection) hudOpponentSection.classList.remove('hidden');
     }
 });
 
@@ -506,8 +550,10 @@ socket.on('game:sync', (data) => {
         dom.viewLobby.classList.remove('hidden');
         dom.viewGame.classList.add('hidden');
         dom.waitAnnouncementBanner.classList.add('hidden');
-        dom.roundIndicator.classList.add('hidden');
-        dom.nextOpponentIndicator.classList.add('hidden');
+        if (hudDashboardCluster) hudDashboardCluster.classList.add('hidden');
+        if (roundIndicatorBox) roundIndicatorBox.classList.add('hidden');
+        if (hudPlayerStats) hudPlayerStats.classList.add('hidden');
+        if (hudOpponentSection) hudOpponentSection.classList.add('hidden');
         dom.hostAdminActions.classList.add('hidden');
         return;
     }
@@ -515,23 +561,26 @@ socket.on('game:sync', (data) => {
     dom.viewLobby.classList.add('hidden');
     dom.viewGame.classList.remove('hidden');
 
-    dom.roundIndicator.textContent = `ラウンド: ${state.currentRound}`;
-    dom.roundIndicator.classList.remove('hidden');
+    // ゲーム画面では左上HUDクラスターを表示
+    if (hudDashboardCluster) hudDashboardCluster.classList.remove('hidden');
+    dom.roundIndicator.textContent = state.currentRound;
+    if (roundIndicatorBox) roundIndicatorBox.classList.remove('hidden');
+    if (hudPlayerStats) hudPlayerStats.classList.remove('hidden');
 
     if (state.currentGameState === 'prep' && me && me.isAlive) {
         if (state.currentOpponentName && state.currentOpponentName !== '未定') {
-            dom.nextOpponentIndicator.textContent = `次の対戦相手: ${state.currentOpponentName}`;
-            dom.nextOpponentIndicator.classList.remove('hidden');
+            dom.nextOpponentIndicator.textContent = state.currentOpponentName;
+            if (hudOpponentSection) hudOpponentSection.classList.remove('hidden');
         } else {
-            dom.nextOpponentIndicator.classList.add('hidden');
+            if (hudOpponentSection) hudOpponentSection.classList.add('hidden');
         }
     } else {
-        dom.nextOpponentIndicator.classList.add('hidden');
+        if (hudOpponentSection) hudOpponentSection.classList.add('hidden');
     }
 
-    // 要件1: 準備フェーズであっても、脱落プレイヤーはリロールボタンを恒久的に非活性化
     const isPlayerAlive = me && me.isAlive;
-    dom.btnReroll.disabled = (state.currentGameState !== 'prep' || !isPlayerAlive);
+    const isMarketActive = dom.tabMarket.classList.contains('active');
+    dom.btnReroll.disabled = (state.currentGameState !== 'prep' || !isPlayerAlive || isMarketActive);
 
     if (previousState !== 'prep' && state.currentGameState === 'prep') {
         dom.tabShop.click();
@@ -540,7 +589,6 @@ socket.on('game:sync', (data) => {
         state.currentOpponentName = '未定';
         dom.playerReadyLamp.classList.remove('ready');
 
-        // ラウンド開始時：繰り出しスロットを完全初期化（全カードを手札へ回収）
         state.localDeploySlots = [null, null, null];
         renderDeploySlots(syncLineupChanges);
         renderHand(syncLineupChanges);
@@ -551,7 +599,7 @@ socket.on('game:sync', (data) => {
             dom.waitAnnouncementBanner.classList.add('hidden');
         } else {
             dom.btnFinishPrep.disabled = true;
-            dom.btnReroll.disabled = true; // 要件1
+            dom.btnReroll.disabled = true;
         }
 
         const aliveCount = state.cachedOpponentsList.filter(p => p.isAlive && p.isEntered).length;
@@ -561,7 +609,7 @@ socket.on('game:sync', (data) => {
     if (state.currentGameState === 'prep') {
         if (me && !me.isAlive) {
             dom.btnFinishPrep.disabled = true;
-            dom.btnReroll.disabled = true; // 要件1
+            dom.btnReroll.disabled = true;
             dom.waitAnnouncementBanner.classList.add('hidden');
         } else if (me && me.isReady) {
             dom.waitAnnouncementBanner.textContent = '全員の準備完了を待っています...';
@@ -587,7 +635,9 @@ socket.on('synthesize:success', ({ baseUid }) => {
     const cardEl = Array.from(document.querySelectorAll('.card-item')).find(el => el.__cardData?.uid === baseUid);
     if (cardEl) {
         cardEl.classList.add('card-synth-success');
-        setTimeout(() => cardEl.classList.remove('card-synth-success'), 650);
+        setTimeout(() => {
+            if (cardEl) cardEl.classList.remove('card-synth-success');
+        }, 650);
     }
 });
 
@@ -605,14 +655,15 @@ socket.on('player:sync', (data) => {
     }
 
     if (data.shop) state.localShop = data.shop;
-    if (data.gold !== undefined) dom.playerGoldDisplay.textContent = `${data.gold}G`;
+    if (data.gold !== undefined && dom.playerGoldDisplay) {
+        dom.playerGoldDisplay.textContent = `${data.gold}G`;
+    }
 
     if (data.life !== undefined && state.currentGameState === 'prep') {
         state.displayedLifeMap.set(state.myId, data.life);
         dom.playerLifeDisplay.textContent = formatLife(data.life);
     }
 
-    // shop / market からの直接配置（buyAndDeploy）の反映
     if (state.pendingDeploy && data.hand) {
         const newlyAddedCard = data.hand.find(c => !prevHandUids.has(c.uid));
         if (newlyAddedCard) {
@@ -622,7 +673,6 @@ socket.on('player:sync', (data) => {
         state.pendingDeploy = null;
     }
 
-    // 手札に存在しないUIDを除外
     const currentHandUids = new Set(state.localHand.map(c => c.uid));
     state.localDeploySlots = state.localDeploySlots.map(uid => (uid && currentHandUids.has(uid) ? uid : null));
 
@@ -632,7 +682,6 @@ socket.on('player:sync', (data) => {
     renderShop();
     renderDeploySlots(syncLineupChanges);
 
-    // 手札ドロップ時の飛翔アニメーション
     if (state.pendingHandDropAnim && data.hand) {
         const newlyAddedCard = data.hand.find(c => !prevHandUids.has(c.uid));
         if (newlyAddedCard) {
@@ -745,11 +794,16 @@ dom.tipTabSynth.onclick = () => {
     dom.tipContentTribe.classList.add('hidden');
 };
 
+// 要望4: タブ切り替えとリロールボタンの活性/非活性連動
 dom.tabShop.onclick = () => {
     dom.tabShop.classList.add('active');
     dom.tabMarket.classList.remove('active');
     dom.shopPanel.classList.remove('hidden');
     dom.marketPanel.classList.add('hidden');
+
+    if (state.currentGameState === 'prep' && state.myPlayer && state.myPlayer.isAlive) {
+        dom.btnReroll.disabled = false;
+    }
 };
 
 dom.tabMarket.onclick = () => {
@@ -758,12 +812,15 @@ dom.tabMarket.onclick = () => {
     dom.tabShop.classList.remove('active');
     dom.marketPanel.classList.remove('hidden');
     dom.shopPanel.classList.add('hidden');
+
+    // 要望4: 解雇市場表示中はリロールボタンを非活性化
+    dom.btnReroll.disabled = true;
 };
 
-// 要件1: 脱落プレイヤーのリロールクリック操作ガード
 dom.btnReroll.onclick = () => {
     if (state.currentGameState !== 'prep') return;
     if (!state.myPlayer || !state.myPlayer.isAlive) return;
+    if (dom.tabMarket.classList.contains('active')) return;
     socket.emit('shop:reroll');
 };
 
@@ -828,7 +885,7 @@ dom.btnResultNext.onclick = () => {
         return;
     }
 
-    dom.nextOpponentIndicator.classList.add('hidden');
+    if (hudOpponentSection) hudOpponentSection.classList.add('hidden');
 
     if (state.currentGameState === 'battle') {
         state.hasClickedNextInBattle = true;
@@ -849,6 +906,7 @@ dom.btnRematch.onclick = () => {
     dom.gameOverModal.classList.add('hidden');
     dom.viewGame.classList.add('hidden');
     dom.viewLobby.classList.remove('hidden');
+    if (hudDashboardCluster) hudDashboardCluster.classList.add('hidden');
     socket.emit('lobby:rematch');
 };
 
@@ -858,6 +916,7 @@ dom.btnLeave.onclick = () => {
     dom.gameOverModal.classList.add('hidden');
     dom.viewGame.classList.add('hidden');
     dom.viewLobby.classList.remove('hidden');
+    if (hudDashboardCluster) hudDashboardCluster.classList.add('hidden');
     socket.emit('lobby:leave');
 };
 

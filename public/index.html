@@ -6,26 +6,55 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>グラウンド・オートバトラー</title>
     <link rel="stylesheet" href="style.css">
+    <!-- ファンタジー・ゲーム向け欧文・和文フォント -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800;900&family=M+PLUS+Rounded+1c:wght@500;700;800;900&family=Noto+Sans+JP:wght@500;700;900&display=swap"
+        rel="stylesheet">
 </head>
 
 <body>
 
-    <!-- ================= 画面ヘッダー ================= -->
-    <header id="game-header">
-        <div class="header-left">
-            <h1>グラウンド・オートバトラー</h1>
-            <span id="round-indicator" class="hidden">ラウンド: 1</span>
-            <span id="next-opponent-indicator" class="next-opponent-badge hidden">次の対戦相手: 未定</span>
+    <!-- ================= 画面ヘッダー (HUD：完全独立型) ================= -->
+    <header id="game-header" class="game-hud-header">
+        <!-- 左上HUDクラスター (ロビー画面時はコンテナごと完全非表示) -->
+        <div id="hud-dashboard-cluster" class="hud-dashboard-cluster hidden">
+            <!-- ① ラウンド表示 -->
+            <div id="round-indicator-box" class="hud-round-section hidden">
+                <span class="hud-round-label">ラウンド:</span>
+                <span id="round-indicator" class="hud-round-val">1</span>
+            </div>
+
+            <!-- ② プレイヤー情報 (名前・ライフ) ※所持ゴールドはショップ上部へ移動 -->
+            <div id="hud-player-stats" class="hud-player-section hidden">
+                <div class="hud-player-row-top">
+                    <span id="player-name-display" class="hud-player-name">プレイヤー名</span>
+                    <span id="player-ready-lamp" class="ready-lamp" title="準備状態ランプ"></span>
+                </div>
+                <div class="hud-player-row-mid">
+                    <span id="player-life-display" class="hud-player-life">♥♥♥♥♥</span>
+                </div>
+            </div>
+
+            <!-- ③ 対戦相手情報 (キャプション ＆ 相手名2段組・省略なし) -->
+            <div id="hud-opponent-section" class="hud-opponent-section hidden">
+                <div class="hud-opp-caption">次の対戦相手:</div>
+                <div id="next-opponent-indicator" class="hud-opp-name">未定</div>
+            </div>
         </div>
 
-        <!-- 待機中アナウンスメッセージ -->
-        <div id="wait-announcement-banner" class="announcement-banner hidden">
-            全員の準備完了を待っています...
+        <!-- 中央アナウンスバナー (他UIの伸縮・影響を一切受けない画面中央固定配置) -->
+        <div class="hud-center-fixed-wrapper">
+            <div id="wait-announcement-banner" class="announcement-banner hidden">
+                全員の準備完了を待っています...
+            </div>
         </div>
 
-        <div class="header-right">
-            <button id="btn-open-tips" class="btn header-btn">💡 Tips</button>
-            <button id="btn-open-settings" class="btn header-btn">⚙ 設定</button>
+        <!-- 右上アクションボタン (Tips・設定) -->
+        <div class="hud-right-group">
+            <button id="btn-open-tips" class="btn btn-hud"><span class="btn-icon">💡</span> Tips</button>
+            <button id="btn-open-settings" class="btn btn-hud"><span class="btn-icon">⚙</span> 設定</button>
         </div>
     </header>
 
@@ -39,8 +68,8 @@
 
     <!-- ================= 1. ロビー画面 ================= -->
     <main id="view-lobby" class="view-section">
-        <div class="lobby-card">
-            <h2>ゲームロビー</h2>
+        <div class="lobby-card glass-panel">
+            <h2 class="fantasy-title">グラウンド・オートバトラー</h2>
             <div class="status-box">
                 <p>現在の参加人数: <span id="lobby-entry-count">0</span> / 10</p>
                 <div id="lobby-entry-badge" class="badge">未エントリー</div>
@@ -59,86 +88,114 @@
     </main>
 
     <!-- ================= 2. メインゲーム画面 ================= -->
-    <main id="view-game" class="view-section hidden">
-        <!-- 画面上部：他プレイヤー一覧 -->
-        <section id="opponents-bar" class="opponents-container">
-            <!-- 他プレイヤー枠が動的に生成されます -->
-        </section>
+    <main id="view-game" class="view-section game-layout hidden">
 
-        <!-- 画面中央：ショップ / 解雇市場 & 出撃選択エリア -->
-        <section id="center-board">
-            <div class="tab-controls">
-                <button id="tab-shop" class="tab-btn active">ショップ</button>
-                <button id="tab-market" class="tab-btn disabled-tab" disabled>解雇市場 (R2～)</button>
+        <!-- 【画面左側】：相手プレイヤー縦並びサイドバー -->
+        <aside id="opponents-sidebar" class="opponents-sidebar-panel glass-panel">
+            <div class="sidebar-header">
+                <span class="sidebar-title">対戦相手一覧</span>
             </div>
-
-            <!-- ショップエリア -->
-            <div id="shop-panel" class="market-panel">
-                <div class="shop-header">
-                    <span class="shop-title">陳列カード（右クリックでロック／ドラッグで購入・合成・出撃配置）</span>
-                    <button id="btn-reroll" class="btn warning">リロール (2G)</button>
-                </div>
-                <div id="shop-cards" class="card-grid center-aligned"></div>
+            <div id="opponents-bar" class="opponents-vertical-list">
+                <!-- 他プレイヤーのプレートが縦に動的生成されます -->
             </div>
+        </aside>
 
-            <!-- 解雇市場エリア -->
-            <div id="market-panel" class="market-panel hidden">
-                <div class="shop-header">
-                    <span class="shop-title">解雇市場（他プレイヤーが解雇したカード／ドラッグで購入・合成・出撃配置）</span>
-                </div>
-                <div id="market-cards" class="card-grid center-aligned"></div>
-            </div>
+        <!-- 【画面中央・右側メイン作業領域】：最小限サイズフィット ＆ 背景見通し重視 -->
+        <section class="game-main-workspace">
 
-            <!-- 出撃カード選択スロット -->
-            <div id="deployment-panel" class="deployment-box">
-                <h3>バトルフェーズに繰り出すカードを選択してください (右クリックで手札に戻す)</h3>
-                <div class="slots-container">
-                    <div class="deploy-slot" data-slot="0">
-                        <span class="slot-num">1</span>
-                        <div class="slot-dropzone" id="deploy-0"></div>
-                    </div>
-                    <div class="deploy-slot" data-slot="1">
-                        <span class="slot-num">2</span>
-                        <div class="slot-dropzone" id="deploy-1"></div>
-                    </div>
-                    <div class="deploy-slot" data-slot="2">
-                        <span class="slot-num">3</span>
-                        <div class="slot-dropzone" id="deploy-2"></div>
+            <!-- 上段：ショップ / 解雇市場 (固定サイズ枠維持 ＆ 上部中央ゴールド表示 ＆ 下部中央リロール) -->
+            <div id="center-board" class="center-board-panel glass-panel">
+                <!-- ショップUI上部の中央揃え所持ゴールド表示 (タブの上部・無駄な余白なし) -->
+                <div class="shop-gold-display-wrapper">
+                    <div class="shop-gold-badge">
+                        <span class="gold-coin-symbol">🟡</span>
+                        <span id="player-gold-display" class="shop-gold-val">20G</span>
                     </div>
                 </div>
-            </div>
-        </section>
 
-        <!-- 画面下部：自陣エリア -->
-        <section id="player-dashboard">
-            <div class="dashboard-info">
-                <div class="player-status-line">
-                    <span id="player-name-display" class="player-name">プレイヤー名</span>
-                    <span id="player-life-display" class="player-life">♥♥♥♥♥</span>
-                    <span id="player-gold-display" class="player-gold">20G</span>
-                    <span id="player-ready-lamp" class="ready-lamp" title="待機状態ランプ"></span>
+                <div class="market-top-bar">
+                    <div class="tab-controls">
+                        <button id="tab-shop" class="tab-btn active">ショップ</button>
+                        <button id="tab-market" class="tab-btn disabled-tab" disabled>解雇市場 (R2～)</button>
+                    </div>
                 </div>
-                <div class="dashboard-controls">
+
+                <!-- ショップエリア (6枠) -->
+                <div id="shop-panel" class="market-panel-content">
+                    <div id="shop-cards" class="card-grid shop-grid"></div>
+                </div>
+
+                <!-- 解雇市場エリア (7枚以上はスクロール) -->
+                <div id="market-panel" class="market-panel-content hidden">
+                    <div id="market-cards" class="card-grid market-scroll-grid"></div>
+                </div>
+
+                <!-- リロールボタン (ショップカード群の下部・中央揃え・下部余白確保) -->
+                <div class="shop-bottom-bar">
+                    <button id="btn-reroll" class="btn warning btn-reroll">
+                        <span class="reroll-icon">↺</span> リロール (2G)
+                    </button>
+                </div>
+            </div>
+
+            <!-- 中段：出撃スロット（内蔵完了ボタン付き） ＆ コンパクト解雇エリア -->
+            <div id="tactics-panel" class="tactics-panel-row">
+                <!-- 出撃スロット（3枠 ＋ 3枠目右側に大型完了ボタンを内蔵） -->
+                <div class="deployment-box glass-panel">
+                    <div class="panel-subtitle">出撃スロット (右クリックで解除)</div>
+                    <div class="slots-container">
+                        <div class="deploy-slot" data-slot="0">
+                            <span class="slot-num">1</span>
+                            <div class="slot-dropzone" id="deploy-0"></div>
+                        </div>
+                        <div class="deploy-slot" data-slot="1">
+                            <span class="slot-num">2</span>
+                            <div class="slot-dropzone" id="deploy-1"></div>
+                        </div>
+                        <div class="deploy-slot" data-slot="2">
+                            <span class="slot-num">3</span>
+                            <div class="slot-dropzone" id="deploy-2"></div>
+                        </div>
+
+                        <!-- スロット3枠目の右隣に内蔵された完了ボタン -->
+                        <div class="embedded-action-box">
+                            <button id="btn-finish-prep" class="btn btn-finish-turn-small">
+                                <span class="finish-text">完了</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 正方形解雇エリア (上部売却テキスト削除・内部売却テキスト維持) -->
+                <div class="discard-box-wrapper glass-panel">
                     <div id="discard-dropzone" class="discard-box" title="手札カードをドロップして売却">
-                        🗑 解雇エリア (売却)
+                        <div class="discard-icon">🗑</div>
+                        <div class="discard-title">解雇 (売却)</div>
+                        <div class="discard-desc">ドロップ</div>
                     </div>
-                    <button id="btn-finish-prep" class="btn primary large">完了</button>
                 </div>
             </div>
 
-            <!-- 手札エリア -->
-            <div class="hand-wrapper">
-                <div class="hand-header">手札 (右クリックで空き枠へ出撃 / 同種族・同レアリティを重ねて合成)</div>
-                <div id="player-hand" class="hand-container center-aligned"></div>
+            <!-- 下段：手札エリア (視認性を重視した水平並び展開) -->
+            <div id="hand-section-wrapper" class="hand-section-wrapper glass-panel">
+                <div class="hand-meta-bar">
+                    <span>所持手札 (右クリックで空き枠へ出撃 / 同種族・同レアリティを重ねて合成)</span>
+                </div>
+                <div class="hand-container-horizontal-scroll">
+                    <div id="player-hand" class="hand-container horizontal-hand-container">
+                        <!-- 手札カードが水平に並んで生成されます -->
+                    </div>
+                </div>
             </div>
+
         </section>
     </main>
 
     <!-- ================= 3. バトルフェーズ・シミュレーション画面 ================= -->
     <div id="battle-screen" class="modal-overlay hidden">
-        <div class="battle-box">
+        <div class="battle-box glass-panel">
             <div class="battle-header-bar">
-                <h2 id="battle-view-title">バトルフェーズ</h2>
+                <h2 id="battle-view-title" class="fantasy-title">バトルフェーズ</h2>
                 <span id="spectating-badge" class="badge hidden">👁 観戦中</span>
             </div>
 
@@ -178,9 +235,9 @@
 
     <!-- ================= 4. バトルリザルト画面 ================= -->
     <div id="result-modal" class="modal-overlay hidden">
-        <div class="modal-content large result-split-modal-layout">
+        <div class="modal-content large result-split-modal-layout glass-panel">
             <div class="result-modal-header">
-                <h2 id="result-title">対戦結果</h2>
+                <h2 id="result-title" class="fantasy-title">対戦結果</h2>
                 <p id="result-summary-text"></p>
             </div>
 
@@ -188,7 +245,6 @@
                 <div class="result-damage-panel">
                     <h3>戦闘ダメージ詳細</h3>
                     <div class="result-damage-table-wrapper">
-                        <!-- 8-1: 「自分」「相手」「与えた合計ダメージ」の3列構成 -->
                         <table id="result-damage-table" class="data-table result-cards-table">
                             <thead>
                                 <tr>
@@ -220,8 +276,8 @@
 
     <!-- ================= 5. 最終リザルト画面 ================= -->
     <div id="game-over-modal" class="modal-overlay hidden">
-        <div class="modal-content large">
-            <h2>最終順位結果</h2>
+        <div class="modal-content large glass-panel">
+            <h2 class="fantasy-title">最終順位結果</h2>
 
             <div id="winner-celebration" class="winner-box hidden">
                 <div class="crown-icon">👑</div>
@@ -248,9 +304,9 @@
 
     <!-- ================= 6. Tipsモーダル ================= -->
     <div id="modal-tips" class="modal-overlay hidden">
-        <div class="modal-content large tips-modal-box tips-modal-fixed">
+        <div class="modal-content large tips-modal-box tips-modal-fixed glass-panel">
             <div class="tips-header">
-                <h2>💡 Tips (ガイド)</h2>
+                <h2 class="fantasy-title">💡 Tips (ガイド)</h2>
                 <div class="tips-tabs">
                     <button id="tip-tab-element" class="tab-btn active">属性</button>
                     <button id="tip-tab-tribe" class="tab-btn">種族</button>
@@ -265,23 +321,48 @@
                         <div class="triangle-card">
                             <h4>【属性相性図 1】</h4>
                             <div class="triangle-svg-wrapper">
-                                <svg viewBox="0 0 200 160" class="triangle-svg">
+                                <svg viewBox="0 0 230 165" class="triangle-svg">
                                     <defs>
-                                        <marker id="arrow1" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6"
+                                        <marker id="arrow1" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6"
                                             markerHeight="6" orient="auto-start-reverse">
                                             <path d="M 0 1 L 10 5 L 0 9 z" fill="#f59e0b" />
                                         </marker>
                                     </defs>
-                                    <path d="M 116 38 L 154 114" stroke="#f59e0b" stroke-width="3" fill="none"
+                                    <path d="M 125 38 L 180 125" stroke="#f59e0b" stroke-width="3" fill="none"
                                         marker-end="url(#arrow1)" />
-                                    <path d="M 144 136 L 56 136" stroke="#f59e0b" stroke-width="3" fill="none"
+                                    <path d="M 172 142 L 60 142" stroke="#f59e0b" stroke-width="3" fill="none"
                                         marker-end="url(#arrow1)" />
-                                    <path d="M 46 114 L 84 38" stroke="#f59e0b" stroke-width="3" fill="none"
+                                    <path d="M 50 125 L 105 38" stroke="#f59e0b" stroke-width="3" fill="none"
                                         marker-end="url(#arrow1)" />
                                 </svg>
-                                <div class="svg-node node-top"><span class="elem-badge elem-火">火</span></div>
-                                <div class="svg-node node-right"><span class="elem-badge elem-氷">氷</span></div>
-                                <div class="svg-node node-left"><span class="elem-badge elem-風">風</span></div>
+                                <div class="svg-node node-top">
+                                    <div class="card-elem-badge elem-火" title="属性: 火"
+                                        style="position:static; width:26px; height:26px;">
+                                        <svg viewBox="0 0 24 24" style="width:16px; height:16px;">
+                                            <path
+                                                d="M12 2C9.5 6 6 8.5 6 13a6 6 0 0 0 12 0c0-4-3-6.5-6-11zm0 15a3 3 0 0 1-3-3c0-1.8 1.5-3 3-5 1.5 2 3 3.2 3 5a3 3 0 0 1-3 3z" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <div class="svg-node node-right">
+                                    <div class="card-elem-badge elem-氷" title="属性: 氷"
+                                        style="position:static; width:26px; height:26px;">
+                                        <svg viewBox="0 0 24 24" style="width:16px; height:16px;">
+                                            <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14"
+                                                stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <div class="svg-node node-left">
+                                    <div class="card-elem-badge elem-風" title="属性: 風"
+                                        style="position:static; width:26px; height:26px;">
+                                        <svg viewBox="0 0 24 24" style="width:16px; height:16px;">
+                                            <path d="M4 8h11a3 3 0 1 0-3-3M2 13h15a3 3 0 1 1-3 3M6 18h8a2 2 0 1 0-2-2"
+                                                stroke="currentColor" stroke-width="2.2" fill="none"
+                                                stroke-linecap="round" />
+                                        </svg>
+                                    </div>
+                                </div>
                             </div>
                             <p class="relation-note">火は氷に強く、氷は風に強く、風は火に強い。</p>
                         </div>
@@ -289,23 +370,44 @@
                         <div class="triangle-card">
                             <h4>【属性相性図 2】</h4>
                             <div class="triangle-svg-wrapper">
-                                <svg viewBox="0 0 200 160" class="triangle-svg">
+                                <svg viewBox="0 0 230 165" class="triangle-svg">
                                     <defs>
-                                        <marker id="arrow2" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6"
+                                        <marker id="arrow2" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6"
                                             markerHeight="6" orient="auto-start-reverse">
                                             <path d="M 0 1 L 10 5 L 0 9 z" fill="#f59e0b" />
                                         </marker>
                                     </defs>
-                                    <path d="M 116 38 L 154 114" stroke="#f59e0b" stroke-width="3" fill="none"
+                                    <path d="M 125 38 L 180 125" stroke="#f59e0b" stroke-width="3" fill="none"
                                         marker-end="url(#arrow2)" />
-                                    <path d="M 144 136 L 56 136" stroke="#f59e0b" stroke-width="3" fill="none"
+                                    <path d="M 172 142 L 60 142" stroke="#f59e0b" stroke-width="3" fill="none"
                                         marker-end="url(#arrow2)" />
-                                    <path d="M 46 114 L 84 38" stroke="#f59e0b" stroke-width="3" fill="none"
+                                    <path d="M 50 125 L 105 38" stroke="#f59e0b" stroke-width="3" fill="none"
                                         marker-end="url(#arrow2)" />
                                 </svg>
-                                <div class="svg-node node-top"><span class="elem-badge elem-雷">雷</span></div>
-                                <div class="svg-node node-right"><span class="elem-badge elem-水">水</span></div>
-                                <div class="svg-node node-left"><span class="elem-badge elem-地">地</span></div>
+                                <div class="svg-node node-top">
+                                    <div class="card-elem-badge elem-雷" title="属性: 雷"
+                                        style="position:static; width:26px; height:26px;">
+                                        <svg viewBox="0 0 24 24" style="width:16px; height:16px;">
+                                            <path d="M13 2L3 14h7l-2 8 11-13h-7l2-7z" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <div class="svg-node node-right">
+                                    <div class="card-elem-badge elem-水" title="属性: 水"
+                                        style="position:static; width:26px; height:26px;">
+                                        <svg viewBox="0 0 24 24" style="width:16px; height:16px;">
+                                            <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <div class="svg-node node-left">
+                                    <div class="card-elem-badge elem-地" title="属性: 地"
+                                        style="position:static; width:26px; height:26px;">
+                                        <svg viewBox="0 0 24 24" style="width:16px; height:16px;">
+                                            <path d="M12 3l9 6-3 12H6L3 9zm0 4.5L6.5 10l1.8 7.5h7.4l1.8-7.5z" />
+                                        </svg>
+                                    </div>
+                                </div>
                             </div>
                             <p class="relation-note">雷は水に強く、水は地に強く、地は雷に強い。</p>
                         </div>
@@ -366,77 +468,119 @@
                     </table>
                 </div>
 
-                <!-- 「合成」タブ -->
+                <!-- 「合成」タブ (画像安全遮断付き合成例) -->
                 <div id="tip-content-synth" class="tips-panel vertical-center-panel hidden">
                     <p class="tips-intro-text">レアリティと種族が同じカード同士は合成することができます。</p>
 
                     <div class="synth-example-container">
+                        <!-- 合成元 -->
                         <div class="synth-col">
                             <span class="synth-label">合成元</span>
                             <div class="card-item rarity-common non-interactive">
-                                <div class="card-row-meta">
-                                    <span class="elem-badge elem-火">火</span>
-                                    <span class="card-tribe-name">エルフ</span>
+                                <div class="card-header-bar">
+                                    <div class="card-elem-badge elem-火" title="属性: 火">
+                                        <svg viewBox="0 0 24 24">
+                                            <path
+                                                d="M12 2C9.5 6 6 8.5 6 13a6 6 0 0 0 12 0c0-4-3-6.5-6-11zm0 15a3 3 0 0 1-3-3c0-1.8 1.5-3 3-5 1.5 2 3 3.2 3 5a3 3 0 0 1-3 3z" />
+                                        </svg>
+                                    </div>
+                                    <div class="card-race-title">エルフ</div>
                                 </div>
-                                <div class="card-row-stats-head">
-                                    <span class="badge-star">★1</span>
+                                <div class="card-art-container">
+                                    <img class="card-art-image" src="/assets/cards/fire_elf_1.webp" alt="焔刃のエルフ"
+                                        draggable="false"
+                                        onerror="if(!this.dataset.tried){this.dataset.tried='true';this.src='/images/cards/fire_elf_1.webp';}else{this.onerror=null;this.style.display='none';}" />
+                                    <div class="card-art-overlay">
+                                        <span class="badge-star-pill">★1</span>
+                                    </div>
                                 </div>
-                                <div class="card-name">焔刃のエルフ (Flameblade Elf)</div>
-                                <div class="card-stats">
-                                    <span class="stat-hp" title="HP"><span class="stat-icon">❤</span><span
-                                            class="stat-val">2</span></span>
-                                    <span class="stat-atk" title="攻撃"><span class="stat-icon">⚔</span><span
-                                            class="stat-val">1</span></span>
-                                    <span class="stat-spd" title="素早さ"><span class="stat-icon">⚡</span><span
-                                            class="stat-val">7</span></span>
+                                <div class="card-name-bar">
+                                    <span class="card-name-ja">焔刃のエルフ</span>
+                                    <span class="card-name-en">Flameblade Elf</span>
+                                </div>
+                                <div class="card-stats-footer">
+                                    <div class="stat-unit hp"><span class="icon">❤</span><span class="val">2</span>
+                                    </div>
+                                    <div class="stat-unit atk"><span class="icon">⚔</span><span class="val">1</span>
+                                    </div>
+                                    <div class="stat-unit spd"><span class="icon">⚡</span><span class="val">7</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
                         <div class="synth-op">＋</div>
 
+                        <!-- 素材 -->
                         <div class="synth-col">
                             <span class="synth-label">素材</span>
                             <div class="card-item rarity-common non-interactive">
-                                <div class="card-row-meta">
-                                    <span class="elem-badge elem-氷">氷</span>
-                                    <span class="card-tribe-name">エルフ</span>
+                                <div class="card-header-bar">
+                                    <div class="card-elem-badge elem-氷" title="属性: 氷">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14"
+                                                stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+                                        </svg>
+                                    </div>
+                                    <div class="card-race-title">エルフ</div>
                                 </div>
-                                <div class="card-row-stats-head">
-                                    <span class="badge-star">★1</span>
+                                <div class="card-art-container">
+                                    <img class="card-art-image" src="/assets/cards/ice_elf_1.webp" alt="霜精のエルフ"
+                                        draggable="false"
+                                        onerror="if(!this.dataset.tried){this.dataset.tried='true';this.src='/images/cards/ice_elf_1.webp';}else{this.onerror=null;this.style.display='none';}" />
+                                    <div class="card-art-overlay">
+                                        <span class="badge-star-pill">★1</span>
+                                    </div>
                                 </div>
-                                <div class="card-name">霜精のエルフ (Frost-Spirited Elf)</div>
-                                <div class="card-stats">
-                                    <span class="stat-hp" title="HP"><span class="stat-icon">❤</span><span
-                                            class="stat-val">1</span></span>
-                                    <span class="stat-atk" title="攻撃"><span class="stat-icon">⚔</span><span
-                                            class="stat-val">3</span></span>
-                                    <span class="stat-spd" title="素早さ"><span class="stat-icon">⚡</span><span
-                                            class="stat-val">6</span></span>
+                                <div class="card-name-bar">
+                                    <span class="card-name-ja">霜精のエルフ</span>
+                                    <span class="card-name-en">Frost-Spirited Elf</span>
+                                </div>
+                                <div class="card-stats-footer">
+                                    <div class="stat-unit hp"><span class="icon">❤</span><span class="val">1</span>
+                                    </div>
+                                    <div class="stat-unit atk"><span class="icon">⚔</span><span class="val">3</span>
+                                    </div>
+                                    <div class="stat-unit spd"><span class="icon">⚡</span><span class="val">6</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
                         <div class="synth-op">＝</div>
 
+                        <!-- 合成後 -->
                         <div class="synth-col">
                             <span class="synth-label">合成後</span>
                             <div class="card-item rarity-common non-interactive synth-highlight-gold">
-                                <div class="card-row-meta">
-                                    <span class="elem-badge elem-火">火</span>
-                                    <span class="card-tribe-name">エルフ</span>
+                                <div class="card-header-bar">
+                                    <div class="card-elem-badge elem-火" title="属性: 火">
+                                        <svg viewBox="0 0 24 24">
+                                            <path
+                                                d="M12 2C9.5 6 6 8.5 6 13a6 6 0 0 0 12 0c0-4-3-6.5-6-11zm0 15a3 3 0 0 1-3-3c0-1.8 1.5-3 3-5 1.5 2 3 3.2 3 5a3 3 0 0 1-3 3z" />
+                                        </svg>
+                                    </div>
+                                    <div class="card-race-title">エルフ</div>
                                 </div>
-                                <div class="card-row-stats-head">
-                                    <span class="badge-star">★2</span>
+                                <div class="card-art-container">
+                                    <img class="card-art-image" src="/assets/cards/fire_elf_1.webp" alt="焔刃のエルフ"
+                                        draggable="false"
+                                        onerror="if(!this.dataset.tried){this.dataset.tried='true';this.src='/images/cards/fire_elf_1.webp';}else{this.onerror=null;this.style.display='none';}" />
+                                    <div class="card-art-overlay">
+                                        <span class="badge-star-pill">★2</span>
+                                    </div>
                                 </div>
-                                <div class="card-name">焔刃のエルフ (Flameblade Elf)</div>
-                                <div class="card-stats">
-                                    <span class="stat-hp" title="HP"><span class="stat-icon">❤</span><span
-                                            class="stat-val">3</span></span>
-                                    <span class="stat-atk" title="攻撃"><span class="stat-icon">⚔</span><span
-                                            class="stat-val">4</span></span>
-                                    <span class="stat-spd" title="素早さ"><span class="stat-icon">⚡</span><span
-                                            class="stat-val">13</span></span>
+                                <div class="card-name-bar">
+                                    <span class="card-name-ja">焔刃のエルフ</span>
+                                    <span class="card-name-en">Flameblade Elf</span>
+                                </div>
+                                <div class="card-stats-footer">
+                                    <div class="stat-unit hp"><span class="icon">❤</span><span class="val">3</span>
+                                    </div>
+                                    <div class="stat-unit atk"><span class="icon">⚔</span><span class="val">4</span>
+                                    </div>
+                                    <div class="stat-unit spd"><span class="icon">⚡</span><span class="val">13</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -444,7 +588,7 @@
 
                     <div class="tips-description-box">
                         <p>合成の素材にするカードを、合成元にするカードへドラッグ＆ドロップすることで、合成後のカードの各スタッツがそれぞれの合計値になります。</p>
-                        <p>また、カード名・レアリティ・属性・種族は、合成元カードの情報が引き継がれます。</p>
+                        <p>また、カード名・レアリティ・属性・種族は、合成元カードの情報が引き継がれ、★バッジの数値が合算されます。</p>
                     </div>
                 </div>
             </div>
@@ -457,7 +601,7 @@
 
     <!-- 手札超過 解雇選択モーダル -->
     <div id="modal-overhand" class="modal-overlay hidden">
-        <div class="modal-content">
+        <div class="modal-content glass-panel">
             <h3>手札が7枚以上あります</h3>
             <p>手札が6枚以下になるまで解雇するカードを選択してください。</p>
             <div id="overhand-card-list" class="card-selection-grid center-aligned"></div>
@@ -466,7 +610,7 @@
 
     <!-- 確認用モーダル (汎用) -->
     <div id="modal-confirm" class="modal-overlay hidden">
-        <div class="modal-content small">
+        <div class="modal-content small glass-panel">
             <p id="modal-confirm-msg" class="confirm-message-text"></p>
             <div class="modal-actions">
                 <button id="btn-confirm-yes" class="btn primary">はい</button>
@@ -477,8 +621,8 @@
 
     <!-- 前ラウンド情報確認モーダル -->
     <div id="modal-history" class="modal-overlay hidden">
-        <div class="modal-content large">
-            <h3 id="history-player-name">前ラウンド情報</h3>
+        <div class="modal-content large glass-panel">
+            <h3 id="history-player-name" class="fantasy-title">前ラウンド情報</h3>
             <h4>繰り出したカード順</h4>
             <div id="history-lineup" class="card-grid center-aligned history-card-grid"></div>
             <h4>控えカード</h4>
@@ -491,8 +635,8 @@
 
     <!-- 設定モーダル -->
     <div id="modal-settings" class="modal-overlay hidden">
-        <div class="modal-content small">
-            <h3>設定</h3>
+        <div class="modal-content small glass-panel">
+            <h3 class="fantasy-title">設定</h3>
             <div class="form-group setting-name-group">
                 <label for="input-player-name">名前:</label>
                 <input type="text" id="input-player-name" maxlength="16" />
