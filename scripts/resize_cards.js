@@ -1,6 +1,6 @@
 /**
  * scripts/resize_cards.js
- * カードイラスト一括高精細リサイズ＆アンシャープバッチスクリプト
+ * カードイラスト一括高精細リサイズバッチスクリプト (滑らか・最高画質版)
  *
  * 【実行方法】
  * node scripts/resize_cards.js
@@ -22,6 +22,7 @@ const TARGET_HEIGHT = 270;
 async function run() {
     console.log('====================================================');
     console.log('  グラウンド・オートバトラー カードイラスト高画質最適化バッチ');
+    console.log('  (過剰シャープ排除・シルキー＆クリア最高画質設定)');
     console.log('====================================================\n');
 
     if (!fs.existsSync(CARDS_DIR)) {
@@ -46,45 +47,39 @@ async function run() {
 
     console.log(`対象ファイル数: ${files.length} 件\n`);
 
-    // 2. 元画像の安全バックアップ
-    console.log('[2/3] 元画像の退避・バックアップを確認中...');
+    // 2. 元画像の安全バックアップ確認
+    console.log('[2/3] 元画像（cards_original/）の存在を確認中...');
     for (const file of files) {
         const srcPath = path.join(CARDS_DIR, file);
         const backupPath = path.join(BACKUP_DIR, file);
 
-        // バックアップ側にまだ存在しない場合のみコピー（元画像の保持）
         if (!fs.existsSync(backupPath)) {
             fs.copyFileSync(srcPath, backupPath);
         }
     }
     console.log('      元画像は cards_original/ に安全に保管されています。\n');
 
-    // 3. 高品質リサイズ処理の実行
-    console.log(`[3/3] Lanczos3 + 輪郭強調による高精細縮小を実行中 (${TARGET_WIDTH}x${TARGET_HEIGHT} px)...`);
+    // 3. 高品質リサイズ処理の実行（過剰シャープなし・素直で美しいLanczos3縮小）
+    console.log(`[3/3] 自然で滑らかなLanczos3縮小を実行中 (${TARGET_WIDTH}x${TARGET_HEIGHT} px, Quality: 95)...`);
 
     const hasAssetsFallback = fs.existsSync(ASSETS_FALLBACK_DIR);
     let successCount = 0;
 
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const inputPath = path.join(BACKUP_DIR, file); // 常に安全な元画像から処理
+        const inputPath = path.join(BACKUP_DIR, file); // 常に保管された元画像から生成
         const outputCardPath = path.join(CARDS_DIR, file);
 
         try {
-            // sharpによる最高品質リサイズ & 輪郭シャープネス補正
+            // 過度なアンシャープマスクを廃止し、Lanczos3補間のみで自然かつクッキリと縮小
             const buffer = await sharp(inputPath)
                 .resize(TARGET_WIDTH, TARGET_HEIGHT, {
                     fit: 'cover',
-                    kernel: sharp.kernel.lanczos3 // 最も鮮明な補間フィルター
-                })
-                .sharpen({
-                    sigma: 0.9,  // 輪郭検出半径
-                    m1: 1.1,     // 平坦部のシャープネス
-                    m2: 2.2      // エッジ部のシャープネス（主線をクッキリ立たせる）
+                    kernel: sharp.kernel.lanczos3
                 })
                 .webp({
-                    quality: 90, // 高品位WebP
-                    effort: 6    // 最大圧縮効率探索
+                    quality: 95, // 最高品位WebP（ノイズなし）
+                    effort: 6
                 })
                 .toBuffer();
 
@@ -105,9 +100,8 @@ async function run() {
     }
 
     console.log('\n\n====================================================');
-    console.log(`  全画像の最適化が完了しました！ (成功: ${successCount} 件)`);
-    console.log('  ・元画像: public/images/cards_original/ に永久保存');
-    console.log('  ・高精細画像: public/images/cards/ に配置完了');
+    console.log(`  全画像の再生成が完了しました！ (成功: ${successCount} 件)`);
+    console.log('  ザラつきが消え、元画像特有の滑らかさと鮮明さが蘇りました。');
     console.log('====================================================\n');
 }
 
