@@ -1298,7 +1298,7 @@ body {
     cursor: inherit;
 }
 
-/* イラスト画像 (GPUテクスチャキャッシュぼやけ解除 ＆ クッキリ鮮明化補正) */
+/* イラスト画像 (不要なCSSフィルターを全解除し、高精細アセットの滑らかなグラデーションを自然に表示) */
 .card-art-image {
     width: 100%;
     height: 100%;
@@ -1308,8 +1308,6 @@ body {
     -webkit-user-drag: none !important;
     pointer-events: none !important;
     image-rendering: auto;
-    /* 縮小時のエッジ引き締め・発色クッキリ補正 */
-    filter: contrast(1.05) saturate(1.03) brightness(1.01);
 }
 
 .card-art-fallback {
