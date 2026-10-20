@@ -1,6 +1,6 @@
 /**
  * src/server/gameManager.js
- * プレイヤーおよび全体ゲーム状態の管理モジュール (完全均等マッチング＆ホスト保護版)
+ * プレイヤーおよび全体ゲーム状態の管理モジュール (前ラウンド情報ライフサイクル適正化版)
  */
 
 const crypto = require('crypto');
@@ -108,7 +108,8 @@ class Player {
         this.isAlive = true;
         this.eliminatedRound = null;
         this.rank = null;
-        this.lastRoundInfo = null;
+        this.lastRoundInfo = null; // 前ラウンドの確定編成情報
+        this.pendingLastRoundInfo = null; // 当該ラウンドの戦闘編成一時退避
         this.purchasedMarketUids = new Set();
     }
 
@@ -161,10 +162,10 @@ class GameManager {
         this.battleParticipants = new Set();
 
         // 公平マッチング用メタデータ
-        this.ghostMatchCounts = {}; // playerId -> 影戦累計回数
-        this.lastPvPOpponents = {}; // playerId -> 直前に対人戦(生身)で対戦した相手ID
-        this.lastRoundGhostFighters = new Set(); // 直前ラウンドで影戦を行ったプレイヤーID
-        this.lastGhostSources = {}; // playerId -> 直前に対戦した影の提供元ID
+        this.ghostMatchCounts = {};
+        this.lastPvPOpponents = {};
+        this.lastRoundGhostFighters = new Set();
+        this.lastGhostSources = {};
     }
 
     addPlayer(id, name) {
@@ -229,11 +230,6 @@ class GameManager {
         return this.players[id];
     }
 
-    /**
-     * 要件1修正: ホスト権限の更新・委譲
-     * - 切断時、または明示的な「退出」(forceTransferFromId)時のみ委譲
-     * - 結果閲覧中（isEntered === false）であることを理由にホスト権限を奪わない
-     */
     updateHost(forceTransferFromId = null) {
         const allPlayerList = Object.values(this.players);
         if (allPlayerList.length === 0) {
@@ -273,9 +269,6 @@ class GameManager {
         }));
     }
 
-    /**
-     * 要件2改修: マッチング用メタデータ取得（生身PvPと影戦の履歴を完全分離）
-     */
     getMatchMetadata() {
         return {
             ghostMatchCounts: this.ghostMatchCounts,
@@ -285,42 +278,33 @@ class GameManager {
         };
     }
 
-    /**
-     * 要件2改修: 対戦記録（生身対人戦と影戦を明確に分離して記録）
-     */
     recordMatch(p1Id, p2Id, isGhost = false, originalGhostId = null) {
         if (!this.matchHistory[p1Id]) this.matchHistory[p1Id] = {};
 
         if (isGhost) {
             const targetGhostSourceId = originalGhostId || p2Id;
 
-            // 影戦累計回数と直前影戦状態を更新
             this.ghostMatchCounts[p1Id] = (this.ghostMatchCounts[p1Id] || 0) + 1;
             this.lastRoundGhostFighters.add(p1Id);
             this.lastGhostSources[p1Id] = targetGhostSourceId;
 
-            // 重要: 影戦を行ったプレイヤーは直前に生身の対戦をしていないため、lastPvPOpponents をクリア
             delete this.lastPvPOpponents[p1Id];
 
-            // 仕様03-1.3: 累積履歴への対称記録
             this.matchHistory[p1Id][targetGhostSourceId] = (this.matchHistory[p1Id][targetGhostSourceId] || 0) + 1;
             if (this.players[targetGhostSourceId]) {
                 if (!this.matchHistory[targetGhostSourceId]) this.matchHistory[targetGhostSourceId] = {};
                 this.matchHistory[targetGhostSourceId][p1Id] = (this.matchHistory[targetGhostSourceId][p1Id] || 0) + 1;
             }
         } else {
-            // 生身同士の対人戦
             this.matchHistory[p1Id][p2Id] = (this.matchHistory[p1Id][p2Id] || 0) + 1;
             if (this.players[p2Id]) {
                 if (!this.matchHistory[p2Id]) this.matchHistory[p2Id] = {};
                 this.matchHistory[p2Id][p1Id] = (this.matchHistory[p2Id][p1Id] || 0) + 1;
             }
 
-            // 直前に対人戦を行った相手として相互に記録
             this.lastPvPOpponents[p1Id] = p2Id;
             this.lastPvPOpponents[p2Id] = p1Id;
 
-            // 影戦フラグの解除
             this.lastRoundGhostFighters.delete(p1Id);
             this.lastRoundGhostFighters.delete(p2Id);
             delete this.lastGhostSources[p1Id];
@@ -359,6 +343,7 @@ class GameManager {
 
             p.shop = [];
             p.lastRoundInfo = null;
+            p.pendingLastRoundInfo = null;
             p.purchasedMarketUids.clear();
 
             this.matchHistory[p.id] = {};
@@ -383,6 +368,14 @@ class GameManager {
         this.battleParticipants.clear();
 
         const goldBonus = this.round >= 5 ? 15 : 10;
+
+        // 全プレイヤー（生存者・脱落者含む）の前ラウンド情報を確定反映
+        Object.values(this.players).forEach(p => {
+            if (p.pendingLastRoundInfo) {
+                p.lastRoundInfo = p.pendingLastRoundInfo;
+                p.pendingLastRoundInfo = null;
+            }
+        });
 
         const remaining = Object.values(this.players).filter(p => p.isAlive && p.isEntered);
         remaining.forEach(p => {

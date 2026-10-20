@@ -1,6 +1,6 @@
 /**
  * src/server/battleEngine.js
- * 戦闘計算・マッチング・シミュレーションモジュール (完全均等マッチング版)
+ * 戦闘計算・マッチング・シミュレーションモジュール (前ラウンド情報確定タイミング最適化版)
  */
 
 const {
@@ -67,12 +67,13 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
     const p1CombatTeam = applyTribeBonus(p1LineupCards, p1.hand);
     const p2CombatTeam = applyTribeBonus(p2LineupCards, p2.hand);
 
-    p1.lastRoundInfo = {
+    // バトル中の「前ラウンド情報」先行上書きを防止し、次ラウンド移行時に確定反映するよう一時保持
+    p1.pendingLastRoundInfo = {
         lineup: p1CombatTeam.map(c => JSON.parse(JSON.stringify(c))),
         bench: applyTribeBonus(p1Bench, p1.hand).map(c => JSON.parse(JSON.stringify(c)))
     };
     if (!isP2Ghost) {
-        p2.lastRoundInfo = {
+        p2.pendingLastRoundInfo = {
             lineup: p2CombatTeam.map(c => JSON.parse(JSON.stringify(c))),
             bench: applyTribeBonus(p2Bench, p2.hand).map(c => JSON.parse(JSON.stringify(c)))
         };
@@ -194,6 +195,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
             combatPairRecords.push(currentPair);
         }
 
+        // 新カード繰り出し時および初期ターン：素早さを再度比較して先攻を決定
         if (!nextAttacker) {
             if (active1.spd > active2.spd) nextAttacker = 1;
             else if (active2.spd > active1.spd) nextAttacker = 2;
@@ -308,6 +310,7 @@ function simulateBattle(p1, p2, isP2Ghost = false) {
                     });
                 }
             }
+            // 新カード繰り出しのため、先攻をリセットして素早さを再比較する
             nextAttacker = null;
         } else {
             nextAttacker = attackerIsP1 ? 2 : 1;
@@ -390,9 +393,6 @@ function getMatchCount(matchHistory, idA, idB) {
 
 /**
  * 3層ハイブリッド評価関数による完全均等マッチングアルゴリズム
- * @param {Array} activePlayers - 生存・参加中のプレイヤー一覧
- * @param {Object} matchHistory - 相互の対戦回数履歴
- * @param {Object} matchMetadata - { ghostMatchCounts, lastPvPOpponents, lastRoundGhostFighters, lastGhostSources }
  */
 function createRoundMatchups(activePlayers, matchHistory = {}, matchMetadata = {}) {
     const matchups = {};
@@ -414,7 +414,6 @@ function createRoundMatchups(activePlayers, matchHistory = {}, matchMetadata = {
     const lastRoundGhostFighters = matchMetadata.lastRoundGhostFighters || new Set();
     const lastGhostSources = matchMetadata.lastGhostSources || {};
 
-    // ランダム性を担保するための初期シャッフル
     const pool = [...activePlayers];
     for (let i = pool.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -423,16 +422,10 @@ function createRoundMatchups(activePlayers, matchHistory = {}, matchMetadata = {
 
     const n = pool.length;
 
-    /**
-     * 通常対人戦（PvP）のコスト評価
-     * - 基本コスト: 対戦回数 × 100（影戦より大幅に重み付けして対人未対戦を最優先）
-     * - 直前PvPペナルティ: +1000（生身同士で直前に対戦したペアのみを厳格に阻止）
-     */
     function getPvPCost(pA, pB) {
         const count = getMatchCount(matchHistory, pA.id, pB.id);
         let cost = count * 100;
 
-        // 重要修正: 影戦相手ではなく、直前に「生身同士」で対戦したペアのみにペナルティ
         if (lastPvPOpponents[pA.id] === pB.id || lastPvPOpponents[pB.id] === pA.id) {
             cost += 1000;
         }
@@ -440,38 +433,27 @@ function createRoundMatchups(activePlayers, matchHistory = {}, matchMetadata = {
         return cost;
     }
 
-    /**
-     * 影戦（PvE）のコスト評価
-     * - 影戦累計回数の差による絶対的ペナルティ: 未消化プレイヤーを強制選出
-     * - 直前ラウンド影戦ペナルティ: +5000（影戦の2連続を確実に防止）
-     * - 影の提供元との対戦回数コスト: 回数 × 10
-     */
     const minGhostCount = Math.min(...pool.map(p => ghostMatchCounts[p.id] || 0));
 
     function getGhostCost(oddPlayer, ghostSource) {
         let cost = 0;
         const gCount = ghostMatchCounts[oddPlayer.id] || 0;
 
-        // 影戦回数が最小でないプレイヤーには特大ペナルティ（全員均等消化の完全保証）
         if (gCount > minGhostCount) {
             cost += (gCount - minGhostCount) * 10000;
         }
 
-        // 直前ラウンドで影と戦ったプレイヤーには連続影戦ペナルティ
         if (lastRoundGhostFighters.has(oddPlayer.id)) {
             cost += 5000;
         }
 
-        // 影の提供元との過去対戦回数
         const sourceMatchCount = getMatchCount(matchHistory, oddPlayer.id, ghostSource.id);
         cost += sourceMatchCount * 10;
 
-        // 直前に対戦した影と同じ相手である場合のペナルティ
         if (lastGhostSources[oddPlayer.id] === ghostSource.id) {
             cost += 200;
         }
 
-        // 直前に生身で対戦した相手の影である場合のペナルティ
         if (lastPvPOpponents[oddPlayer.id] === ghostSource.id) {
             cost += 100;
         }
@@ -479,7 +461,6 @@ function createRoundMatchups(activePlayers, matchHistory = {}, matchMetadata = {
         return cost;
     }
 
-    // 偶数プレイヤー群の全ペアリング最適化探索
     function solveEvenPairing(playerList) {
         const m = playerList.length;
         if (m === 0) return { pairs: [], cost: 0 };
@@ -517,7 +498,6 @@ function createRoundMatchups(activePlayers, matchHistory = {}, matchMetadata = {
         return { pairs: bestPairs || [], cost: minCost };
     }
 
-    // 偶数人の場合：全組み合わせから総コスト最小を探索
     if (n % 2 === 0) {
         const result = solveEvenPairing(pool);
         result.pairs.forEach(([p1, p2]) => {
@@ -527,7 +507,6 @@ function createRoundMatchups(activePlayers, matchHistory = {}, matchMetadata = {
         return matchups;
     }
 
-    // 奇数人の場合：影戦完全均等ローテーション＋生身最適化を含めた全探索
     let bestTotalCost = Infinity;
     let bestOddGhost = null;
     let bestGhostSource = null;
@@ -537,10 +516,8 @@ function createRoundMatchups(activePlayers, matchHistory = {}, matchMetadata = {
         const oddPlayer = pool[i];
         const remainingPlayers = pool.filter((_, idx) => idx !== i);
 
-        // 残り偶数人の対人戦最小コスト解を算出
         const evenSolution = solveEvenPairing(remainingPlayers);
 
-        // oddPlayer に対する最適な影の提供元を選定
         for (let j = 0; j < remainingPlayers.length; j++) {
             const sourceCandidate = remainingPlayers[j];
             const ghostCost = getGhostCost(oddPlayer, sourceCandidate);

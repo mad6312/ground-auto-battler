@@ -1,6 +1,6 @@
 /**
  * public/js/battleUI.js
- * バトル演出・アニメーション・リザルト描画モジュール (完全改修版)
+ * バトル演出・アニメーション・リザルト描画モジュール (残HPリアルタイム反映修正版)
  */
 
 import { state, dom, socket, formatLife, renderCardDots, clearAllBattleTimers, escapeHtml } from './state.js';
@@ -50,9 +50,12 @@ export function spawnDamagePopup(container, text, type) {
     safeTimeout(() => popup.remove(), 1000);
 }
 
+/**
+ * 戦闘中カードの残HPをリアルタイムに更新（セレクタ整合性修正）
+ */
 function updateCardSlotHp(cardSlotElement, newHp) {
     if (!cardSlotElement) return;
-    const hpValEl = cardSlotElement.querySelector('.stat-hp .stat-val');
+    const hpValEl = cardSlotElement.querySelector('.stat-unit.hp .val');
     if (hpValEl) {
         hpValEl.textContent = Math.max(0, newHp);
     }
@@ -87,7 +90,6 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
     clearBackgroundSkipTimer();
     cleanupCombatantVisuals();
 
-    // H-4: 新しいバトルが始まった証拠なので、前試合の終了画面・フラグを確実にクリア
     state.isGameOverShown = false;
     dom.gameOverModal.classList.add('hidden');
 
@@ -124,7 +126,6 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
     let logIndex = 0;
 
     function advanceStep() {
-        // H-4: 明示的フラグで演出中断を安全判定
         if (state.isGameOverShown || !dom.resultModal.classList.contains('hidden')) {
             clearAllBattleTimers();
             clearBackgroundSkipTimer();
@@ -230,6 +231,7 @@ export function startBattleAnimation(summary, logs, gameOverFlag) {
                     spawnDamagePopup(defSide, `-${log.damage}`, popType);
                     safeTimeout(() => defSide.classList.remove('anim-hurt'), 400);
 
+                    // 防御側の残HPをリアルタイムにカードUIへ反映
                     const defRemainingHp = atkIsP1
                         ? (needSwap ? log.state?.p1Card?.hp : log.state?.p2Card?.hp)
                         : (needSwap ? log.state?.p2Card?.hp : log.state?.p1Card?.hp);
@@ -454,7 +456,7 @@ export function showGameOver(rankings) {
     dom.modalConfirm.classList.add('hidden');
     dom.modalHistory.classList.add('hidden');
     dom.modalSettings.classList.add('hidden');
-    if (dom.modalTips) dom.modalTips.classList.add('hidden'); // L-9修正
+    if (dom.modalTips) dom.modalTips.classList.add('hidden');
 
     dom.gameOverModal.classList.remove('hidden');
 
