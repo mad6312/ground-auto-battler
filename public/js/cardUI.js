@@ -1,7 +1,7 @@
 /**
  * public/js/cardUI.js
  * カードUIコンポーネント生成および表示制御モジュール
- * (実測幅自動リサイズ・外側バッジ見切れ防止・高画質レンダリング完全版)
+ * (実測幅自動リサイズ・読み込みチラつき根絶・外側バッジ完全版)
  */
 
 import { state, dom, socket, escapeHtml } from './state.js';
@@ -53,9 +53,6 @@ function getMeasureContext() {
     return measureCanvasContext;
 }
 
-/**
- * フォント設定とテキストを指定し、実際の描画ピクセル幅を測定する
- */
 function measureTextWidth(text, fontSpec) {
     if (!text) return 0;
     const ctx = getMeasureContext();
@@ -64,14 +61,11 @@ function measureTextWidth(text, fontSpec) {
     return ctx.measureText(text).width;
 }
 
-/**
- * カード名表示領域（内幅約108px）に収まるよう、実測幅に基づいて最適なフォントスタイルを算出
- */
 function calculateFittedNameStyles(nameJa, nameEn) {
-    const maxWidth = 108; // カード幅124px - 左右枠線・パディング
-    const baseRemPx = 16; // ルートフォントサイズ基準値
+    const maxWidth = 108;
+    const baseRemPx = 16;
 
-    // ① 日本語 (基本フォントサイズ: 0.69rem ≒ 11.04px, 太字900)
+    // 日本語 (0.69rem ≒ 11.04px)
     const baseJaSizePx = 0.69 * baseRemPx;
     const jaFontSpec = `900 ${baseJaSizePx}px "Noto Sans JP", sans-serif`;
     const measuredJaWidth = measureTextWidth(nameJa, jaFontSpec);
@@ -83,7 +77,7 @@ function calculateFittedNameStyles(nameJa, nameEn) {
         styleJa = `font-size: ${fittedSizeRem}rem; letter-spacing: -0.3px;`;
     }
 
-    // ② 英語 (基本フォントサイズ: 0.46rem ≒ 7.36px, 太字600)
+    // 英語 (0.46rem ≒ 7.36px)
     let styleEn = '';
     if (nameEn) {
         const baseEnSizePx = 0.46 * baseRemPx;
@@ -100,9 +94,6 @@ function calculateFittedNameStyles(nameJa, nameEn) {
     return { styleJa, styleEn };
 }
 
-/**
- * カード名（"日本語名 (英語名)"）を日本語と英語（括弧なし）に分離する
- */
 export function splitCardName(fullName) {
     if (!fullName) return { ja: '', en: '' };
     const match = fullName.match(/^(.*?)(?:\s*\((.*?)\))?$/);
@@ -489,7 +480,7 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
 }
 
 /**
- * カードDOM生成 (実測幅自動リサイズ・外側バッジ見切れ防止完全版)
+ * カードDOM生成 (読み込みチラつき根絶・プレースホルダー常時展開版)
  */
 export function createCardElement(card, options = {}) {
     const div = document.createElement('div');
@@ -528,7 +519,6 @@ export function createCardElement(card, options = {}) {
         tribeClass += ' race-long';
     }
 
-    // カード名の日英分離および実測幅に基づく動的スケーリングスタイルの算出
     const nameParts = splitCardName(card.name);
     const { styleJa, styleEn } = calculateFittedNameStyles(nameParts.ja, nameParts.en);
 
@@ -554,17 +544,21 @@ export function createCardElement(card, options = {}) {
       <div class="${tribeClass}">${card.tribe}</div>
     </div>
 
-    <!-- ② イラスト領域 (完全整数120px×90px・画像切り抜き) -->
-    <div class="card-art-container">
-      <img class="card-art-image" src="${primarySrc}" alt="${escapeHtml(nameParts.ja)}"
-           draggable="false" ondragstart="return false;"
-           onerror="if(!this.dataset.triedFallback){ this.dataset.triedFallback='true'; this.src='${fallbackSrc}'; } else { this.onerror=null; this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex'; }" />
-      <div class="card-art-fallback" style="display: none;">
+    <!-- ② イラスト領域 (読み込み中も属性紋章プレースホルダーで黒落ちを防止) -->
+    <div class="card-art-container" style="position: relative;">
+      <!-- 背景プレースホルダー：画像がロードされるまでの間、うっすらと属性の紋章を表示 -->
+      <div class="card-art-fallback" style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; opacity: 0.22; pointer-events: none; z-index: 1;">
         ${elemSvg}
       </div>
+
+      <!-- イラスト画像：読み込み完了と同時に前面にパッと表示 -->
+      <img class="card-art-image" src="${primarySrc}" alt="${escapeHtml(nameParts.ja)}"
+           style="position: relative; z-index: 2;"
+           draggable="false" ondragstart="return false;"
+           onerror="if(!this.dataset.triedFallback){ this.dataset.triedFallback='true'; this.src='${fallbackSrc}'; } else { this.onerror=null; this.style.display='none'; const fb = this.previousElementSibling; if(fb){ fb.style.opacity='0.45'; } }" />
     </div>
 
-    <!-- バッジオーバーレイ (イラストコンテナ外側に配置し吹き出し見切れを防止) -->
+    <!-- バッジオーバーレイ (イラスト外側配置により吹き出し見切れを完全防止) -->
     <div class="card-art-overlay">
       ${starOverlayHtml}
       ${kaiOverlayHtml}
@@ -590,7 +584,6 @@ export function createCardElement(card, options = {}) {
     </div>
   `;
 
-    // ロックアイコン（カード右上外側に飛び出す配置を保ちつつ完全表示）
     if (options.isLocked) {
         const lockBadge = document.createElement('div');
         lockBadge.className = 'card-lock-badge';
@@ -719,7 +712,7 @@ export function renderMarketCards() {
 }
 
 /**
- * 手札エリアのレンダリング (視認性重視の水平並び展開)
+ * 手札エリアのレンダリング
  */
 export function renderHand(syncLineupCallback, options = {}) {
     dom.playerHandContainer.innerHTML = '';

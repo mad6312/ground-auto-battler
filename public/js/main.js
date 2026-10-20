@@ -1,7 +1,7 @@
 /**
  * public/js/main.js
  * クライアント側メインエントリーモジュール
- * (対戦相手UI動的伸縮・手札接触防止スクロール・ショップ一体化ゴールド完全版)
+ * (全画像バックグラウンドプリロード・チラつき根絶・完全版)
  */
 
 import {
@@ -50,14 +50,60 @@ const roundIndicatorBox = document.getElementById('round-indicator-box');
 const hudPlayerStats = document.getElementById('hud-player-stats');
 const hudOpponentSection = document.getElementById('hud-opponent-section');
 
-// 修正要件1 & 3: 対戦相手一覧UIの動的伸縮・横方向干渉回避・手札UI接触時ストップ制御
+// ============================================================
+// 全180種類カード画像のバックグラウンド・プリローダー
+// (リロール時の一瞬黒くなるチラつきを完全根絶)
+// ============================================================
+let isPreloadStarted = false;
+function preloadAllCardImages() {
+    if (isPreloadStarted) return;
+    isPreloadStarted = true;
+
+    const elements = ['fire', 'ice', 'wind', 'thunder', 'water', 'earth'];
+    const tribes = ['dragon', 'dwarf', 'elf', 'orc', 'vampire', 'lizard'];
+    const levels = [1, 2, 3, 4, 5];
+
+    const urls = [];
+    for (const elem of elements) {
+        for (const tribe of tribes) {
+            for (const lvl of levels) {
+                urls.push(`/images/cards/${elem}_${tribe}_${lvl}.webp`);
+            }
+        }
+    }
+
+    // ブラウザのUI描画を一切ブロックしないよう同時並列4本で順次キャッシュ
+    const CONCURRENCY = 4;
+    let cursor = 0;
+
+    function loadNext() {
+        if (cursor >= urls.length) return;
+        const currentUrl = urls[cursor++];
+        const img = new Image();
+        img.onload = img.onerror = () => {
+            loadNext();
+        };
+        img.src = currentUrl;
+    }
+
+    for (let i = 0; i < CONCURRENCY; i++) {
+        loadNext();
+    }
+}
+
+// ページロード時および接続時にアイドル時間を利用して先読み開始
+if (typeof requestIdleCallback !== 'undefined') {
+    requestIdleCallback(() => preloadAllCardImages(), { timeout: 2000 });
+} else {
+    setTimeout(preloadAllCardImages, 500);
+}
+
 function adjustWorkspaceLayoutForSidebar() {
     const sidebar = document.getElementById('opponents-sidebar');
     const workspace = document.getElementById('game-main-workspace');
     const handWrapper = document.getElementById('hand-section-wrapper');
     if (!sidebar || !workspace || dom.viewGame.classList.contains('hidden')) return;
 
-    // ① 横方向の接触干渉防止制御（接触しそうな時だけ中央UIを右へ退避）
     const sidebarRect = sidebar.getBoundingClientRect();
     const sidebarRight = sidebarRect.right;
 
@@ -73,11 +119,10 @@ function adjustWorkspaceLayoutForSidebar() {
         workspace.style.transform = 'none';
     }
 
-    // ② 修正要件3: 縦方向の動的伸縮・手札UI接触防止制御
     if (handWrapper) {
         const handRect = handWrapper.getBoundingClientRect();
         const sidebarTop = sidebarRect.top;
-        const verticalSafeMargin = 16; // 手札UIとの安全余白
+        const verticalSafeMargin = 16;
         const availableHeight = handRect.top - sidebarTop - verticalSafeMargin;
 
         if (availableHeight > 100) {
@@ -146,9 +191,6 @@ function showOverhandDiscardModal() {
     });
 }
 
-/**
- * 画面左側サイドバー：対戦相手プレイヤー縦並びリストのレンダリング (人数に応じた動的伸縮対応)
- */
 function renderOpponentsBar() {
     dom.opponentsBar.innerHTML = '';
     const enteredPlayers = state.cachedOpponentsList.filter(p => p.isEntered);
@@ -165,7 +207,6 @@ function renderOpponentsBar() {
             state.reservedSpectateTargetId = null;
         }
 
-        // 自分自身のステータス
         if (p.id === state.myId) {
             state.myPlayer = p;
             dom.playerNameDisplay.textContent = p.name;
@@ -187,7 +228,6 @@ function renderOpponentsBar() {
             return;
         }
 
-        // 相手プレイヤーカードプレート
         const card = document.createElement('div');
         card.className = `opponent-card ${!effectiveIsAlive ? 'dead' : ''}`;
 
@@ -278,11 +318,9 @@ function renderOpponentsBar() {
         dom.opponentsBar.appendChild(card);
     });
 
-    // サイドバー更新後のサイズ・接触干渉判定を即時再計算
     requestAnimationFrame(adjustWorkspaceLayoutForSidebar);
 }
 
-// 各ラウンド開始時ポップアップ演出および配布アニメーション順序保証
 function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
     const popup = document.getElementById('round-start-popup');
     const title = document.getElementById('round-popup-title');
@@ -382,7 +420,7 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
     }
 
     // ③ 手札カード上へのドロップ (手札カード同士の合成)
-    const targetCardEl = dropTarget ? dropTarget.closest('#player-hand .card-item') : null;
+    const targetCardEl = dropTarget ? dropTarget.closest('.card-item') : null;
     if (targetCardEl && targetCardEl.__cardData && targetCardEl.__cardData.uid !== dragData.card.uid) {
         const targetCard = targetCardEl.__cardData;
 
@@ -462,6 +500,7 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
 // ============================
 socket.on('connect', () => {
     state.myId = socket.id;
+    preloadAllCardImages();
     if (state.currentGameState !== 'lobby') {
         resetClientGameState();
         state.currentGameState = 'lobby';
