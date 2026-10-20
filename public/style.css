@@ -97,20 +97,21 @@ body {
     transition: transform 0.38s cubic-bezier(0.18, 0.9, 0.28, 1), opacity 0.38s ease-out !important;
 }
 
-/* ================= トースト通知 ================= */
+/* ================= トースト通知 (所持ゴールド表示より上部に配置) ================= */
 .game-toast {
     position: fixed;
-    top: 56px;
+    top: 8px;
     left: 50%;
     transform: translateX(-50%) translateY(-20px);
-    background: rgba(239, 68, 68, 0.94);
+    background: rgba(239, 68, 68, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.3);
     color: #ffffff;
-    padding: 6px 20px;
+    padding: 6px 22px;
     border-radius: 20px;
     font-size: 0.88rem;
     font-weight: bold;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
-    z-index: 10001;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.75);
+    z-index: 10005;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.25s ease, transform 0.25s ease;
@@ -549,7 +550,7 @@ body {
     overflow: hidden;
 }
 
-/* 対戦相手一覧UI (人数に応じた動的伸縮・手札接触手前での自動スクロール化) */
+/* 対戦相手一覧UI */
 .opponents-sidebar-panel {
     position: absolute;
     left: 16px;
@@ -674,8 +675,6 @@ body {
 
 /* ============================================================
    ショップ / 解雇市場コンテナ
-   【修正点1】台形領域の見切れを解消するため上部マージン(26px)を確保
-   【修正点2】space-between を flex-start に変更し、タブとカードの間の不必要な空白を完全根絶！
    ============================================================ */
 .center-board-panel {
     width: 840px !important;
@@ -685,12 +684,10 @@ body {
     min-height: 312px !important;
     max-height: 312px !important;
     margin: 26px auto 0 auto !important;
-    /* 台形が上に突き出ても100%見切れない安全余白を確保 */
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: flex-start !important;
-    /* 不必要な間隔の引き離しを廃止 */
     padding: 0 12px 6px 12px;
     overflow: visible !important;
     flex-shrink: 0;
@@ -699,7 +696,7 @@ body {
     border-radius: 10px;
 }
 
-/* ショップUIと境界線なく完全一体化した所持ゴールド台形タブ (見切れ完全解消) */
+/* ショップUIと境界線なく完全一体化した所持ゴールド台形タブ */
 .shop-gold-trapezoid {
     position: absolute;
     top: -24px;
@@ -709,10 +706,8 @@ body {
     align-items: center;
     justify-content: center;
     gap: 6px;
-    /* ショップUIコンテナ背景と完全に同一化 */
     background: linear-gradient(180deg, rgba(22, 34, 54, 0.98) 0%, rgba(12, 18, 30, 0.98) 100%);
     padding: 4px 30px 2px 30px;
-    /* 左右の辺が斜めの台形：上底が短く下底が長い */
     clip-path: polygon(14px 0%, calc(100% - 14px) 0%, 100% 100%, 0% 100%);
     border-top: 1px solid var(--panel-border);
     border-left: 1px solid var(--panel-border);
@@ -722,7 +717,6 @@ body {
     z-index: 15;
 }
 
-/* ショップ天面ボーダーと台形下辺の境界線を消去するオーバーレイブリッジ */
 .shop-gold-trapezoid::after {
     content: '';
     position: absolute;
@@ -750,7 +744,7 @@ body {
     z-index: 17;
 }
 
-/* タブ行 (高さをコンパクトにし、カードとの間隔を短縮) */
+/* タブ行 */
 .market-top-bar {
     position: relative;
     display: flex;
@@ -759,7 +753,6 @@ body {
     width: 100%;
     margin-top: 6px;
     margin-bottom: 2px;
-    /* タブとカードの間の余白を最小化 */
     flex-shrink: 0;
     height: 32px;
 }
@@ -794,7 +787,7 @@ body {
     background: #0b0f19;
 }
 
-/* リロールボタンコンテナ (ショップUI右上のタブ行右端に絶対配置) */
+/* リロールボタンコンテナ */
 .shop-reroll-container {
     position: absolute;
     right: 0;
@@ -823,7 +816,7 @@ body {
     transform: rotate(180deg);
 }
 
-/* ショップ／解雇市場コンテンツパネル (タブ行直下に無駄な隙間なく緊密配置) */
+/* ショップ／解雇市場コンテンツパネル */
 .market-panel-content {
     display: flex;
     align-items: center;
@@ -849,6 +842,13 @@ body {
     overflow: visible !important;
 }
 
+/* ショップカードのホバー演出（手札と同等の浮上＆グロー） */
+.shop-grid .card-item:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.8), 0 0 16px rgba(56, 189, 248, 0.5);
+    z-index: 10;
+}
+
 /* 解雇市場 (7枚以上はスクロール) */
 .market-scroll-grid {
     display: flex;
@@ -862,6 +862,13 @@ body {
     width: 100%;
 }
 
+/* 解雇市場カードのホバー演出（手札と同等の浮上＆グロー） */
+.market-scroll-grid .card-item:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.8), 0 0 16px rgba(56, 189, 248, 0.5);
+    z-index: 10;
+}
+
 .market-item-slot {
     display: flex;
     flex-direction: column;
@@ -869,6 +876,7 @@ body {
     gap: 4px;
     flex-shrink: 0;
     overflow: visible !important;
+    position: relative;
 }
 
 .card-below-cost {
@@ -1129,7 +1137,7 @@ body {
 }
 
 /* ============================================================
-   3. 刷新版カードデザイン (ピクセルパーフェクト高精細レンダリング)
+   3. 刷新版カードデザイン (外側バッジ見切れ防止・完全版)
    ============================================================ */
 .card-item {
     width: 124px;
@@ -1146,7 +1154,7 @@ body {
     cursor: grab;
     flex-shrink: 0;
     touch-action: none;
-    overflow: hidden;
+    overflow: visible !important;
     transition: transform 0.2s cubic-bezier(0.18, 0.9, 0.28, 1), box-shadow 0.2s;
     transform: translateZ(0);
 }
@@ -1185,11 +1193,13 @@ body {
     box-shadow: inset 0 0 16px rgba(0, 0, 0, 0.95), 0 4px 12px rgba(0, 0, 0, 0.9) !important;
 }
 
-/* ① 最上部ヘッダー */
+/* ① 最上部ヘッダー (角丸を自身で維持) */
 .card-header-bar {
     height: 24px;
     background: rgba(15, 23, 42, 0.95);
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
     position: relative;
     display: flex;
     align-items: center;
@@ -1318,14 +1328,30 @@ body {
     fill: #64748b;
 }
 
+/* イラスト上オーバーレイ（どちらのHTML構造でもイラスト左上に完全吸着） */
 .card-art-overlay {
     position: absolute;
+    pointer-events: none;
+    z-index: 5;
+    overflow: visible !important;
+}
+
+/* カード本体直下にある場合 */
+.card-item>.card-art-overlay {
+    top: 28px;
+    left: 6px;
+    width: 112px;
+    height: 82px;
+}
+
+/* イラストコンテナ内部にある場合（Tips等との完全整合） */
+.card-art-container>.card-art-overlay {
     top: 4px;
     left: 4px;
     right: 4px;
     bottom: 4px;
-    pointer-events: none;
-    z-index: 3;
+    width: calc(100% - 8px);
+    height: calc(100% - 8px);
 }
 
 .badge-star-pill {
@@ -1344,11 +1370,12 @@ body {
     pointer-events: auto;
 }
 
+/* 解バッジ (イラスト右下に配置) */
 .badge-kai-pill {
     position: absolute;
     bottom: 0;
     right: 0;
-    background: rgba(15, 23, 42, 0.88);
+    background: rgba(15, 23, 42, 0.92);
     border: 1px solid #64748b;
     border-radius: 4px;
     color: #f8fafc;
@@ -1356,28 +1383,29 @@ body {
     font-weight: 900;
     padding: 1px 4px;
     cursor: help;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
     line-height: 1.1;
     pointer-events: auto;
 }
 
+/* 解バッジの吹き出しポップアップ（上部飛び出し位置を保ったまま完全表示） */
 .kai-balloon {
     position: absolute;
     bottom: calc(100% + 6px);
     right: 0;
-    background: #0f172a;
+    background: rgba(15, 23, 42, 0.96);
     color: #f8fafc;
-    border: 1px solid #64748b;
+    border: 1px solid var(--accent-blue);
     padding: 4px 8px;
-    border-radius: 4px;
+    border-radius: 5px;
     font-size: 0.7rem;
     white-space: nowrap;
     pointer-events: none;
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.2s, transform 0.2s;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
-    z-index: 100;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.85);
+    z-index: 999;
 }
 
 .badge-kai-pill:hover .kai-balloon {
@@ -1386,7 +1414,7 @@ body {
     transform: translateY(-2px);
 }
 
-/* ③ カード名プレート (日本語・英語の独立フォント制御＆適正リサイズ) */
+/* ③ カード名プレート (日本語・英語の独立フォント制御＆実測幅自動リサイズ) */
 .card-name-bar {
     height: 32px;
     background: rgba(10, 14, 22, 0.95);
@@ -1427,42 +1455,12 @@ body {
     letter-spacing: 0px;
 }
 
-/* 日本語側のみがはみ出す場合の独立縮小クラス */
-.card-name-ja.ja-long {
-    font-size: 0.60rem;
-    letter-spacing: -0.2px;
-}
-
-.card-name-ja.ja-very-long {
-    font-size: 0.52rem;
-    letter-spacing: -0.4px;
-}
-
-.card-name-ja.ja-ultra-long {
-    font-size: 0.45rem;
-    letter-spacing: -0.6px;
-}
-
-/* 英語側のみがはみ出す場合の独立縮小クラス (日本語は巻き添え縮小されない) */
-.card-name-en.en-long {
-    font-size: 0.40rem;
-    letter-spacing: -0.1px;
-}
-
-.card-name-en.en-very-long {
-    font-size: 0.35rem;
-    letter-spacing: -0.2px;
-}
-
-.card-name-en.en-ultra-long {
-    font-size: 0.30rem;
-    letter-spacing: -0.3px;
-}
-
-/* ④ 最下部スタッツバー */
+/* ④ 最下部スタッツバー (角丸を自身で維持) */
 .card-stats-footer {
     height: 24px;
     background: rgba(15, 23, 42, 0.95);
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
     display: flex;
     justify-content: space-around;
     align-items: center;
@@ -1483,9 +1481,10 @@ body {
     font-size: 0.76rem;
 }
 
+/* 攻撃スタッツの剣アイコン（#fde047） */
 .stat-unit.atk .icon {
-    color: #ffffff !important;
-    text-shadow: 0 0 2px #fff;
+    color: #fde047 !important;
+    text-shadow: 0 0 3px rgba(253, 224, 71, 0.6);
     font-size: 0.76rem;
 }
 
@@ -1504,21 +1503,23 @@ body {
     text-shadow: 0 0 6px rgba(34, 197, 94, 0.95);
 }
 
+/* ロックアイコン（飛び出た位置を保ちつつ完全表示） */
 .card-lock-badge {
     position: absolute;
-    top: -5px;
-    right: -5px;
-    background: var(--danger-red);
+    top: -6px;
+    right: -6px;
+    background: rgba(220, 38, 38, 0.98);
+    border: 1.5px solid rgba(255, 255, 255, 0.6);
     color: #fff;
     border-radius: 50%;
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.65rem;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
-    z-index: 5;
+    font-size: 0.72rem;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.85);
+    z-index: 10;
 }
 
 /* 合成ハイライト＆アニメーション */

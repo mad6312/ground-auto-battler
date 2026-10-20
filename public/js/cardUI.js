@@ -1,7 +1,7 @@
 /**
  * public/js/cardUI.js
  * カードUIコンポーネント生成および表示制御モジュール
- * (無限読み込み安全遮断・枠線クリップ根絶・高画質レンダリング・日英独立適正リサイズ完全版)
+ * (実測幅自動リサイズ・外側バッジ見切れ防止・高画質レンダリング完全版)
  */
 
 import { state, dom, socket, escapeHtml } from './state.js';
@@ -40,6 +40,65 @@ export const ELEMENT_ICONS = {
 const activeFlightCounts = new Map();
 let currentHoveredCard = null;
 let currentHoveredArea = null;
+
+// ============================
+// テキスト実測幅測定エンジン (Canvas measureText)
+// ============================
+let measureCanvasContext = null;
+function getMeasureContext() {
+    if (!measureCanvasContext) {
+        const canvas = document.createElement('canvas');
+        measureCanvasContext = canvas.getContext('2d');
+    }
+    return measureCanvasContext;
+}
+
+/**
+ * フォント設定とテキストを指定し、実際の描画ピクセル幅を測定する
+ */
+function measureTextWidth(text, fontSpec) {
+    if (!text) return 0;
+    const ctx = getMeasureContext();
+    if (!ctx) return text.length * 10;
+    ctx.font = fontSpec;
+    return ctx.measureText(text).width;
+}
+
+/**
+ * カード名表示領域（内幅約108px）に収まるよう、実測幅に基づいて最適なフォントスタイルを算出
+ */
+function calculateFittedNameStyles(nameJa, nameEn) {
+    const maxWidth = 108; // カード幅124px - 左右枠線・パディング
+    const baseRemPx = 16; // ルートフォントサイズ基準値
+
+    // ① 日本語 (基本フォントサイズ: 0.69rem ≒ 11.04px, 太字900)
+    const baseJaSizePx = 0.69 * baseRemPx;
+    const jaFontSpec = `900 ${baseJaSizePx}px "Noto Sans JP", sans-serif`;
+    const measuredJaWidth = measureTextWidth(nameJa, jaFontSpec);
+
+    let styleJa = '';
+    if (measuredJaWidth > maxWidth) {
+        const scale = maxWidth / measuredJaWidth;
+        const fittedSizeRem = (0.69 * scale).toFixed(3);
+        styleJa = `font-size: ${fittedSizeRem}rem; letter-spacing: -0.3px;`;
+    }
+
+    // ② 英語 (基本フォントサイズ: 0.46rem ≒ 7.36px, 太字600)
+    let styleEn = '';
+    if (nameEn) {
+        const baseEnSizePx = 0.46 * baseRemPx;
+        const enFontSpec = `600 ${baseEnSizePx}px "Noto Sans JP", sans-serif`;
+        const measuredEnWidth = measureTextWidth(nameEn, enFontSpec);
+
+        if (measuredEnWidth > maxWidth) {
+            const scale = maxWidth / measuredEnWidth;
+            const fittedSizeRem = (0.46 * scale).toFixed(3);
+            styleEn = `font-size: ${fittedSizeRem}rem; letter-spacing: -0.2px;`;
+        }
+    }
+
+    return { styleJa, styleEn };
+}
 
 /**
  * カード名（"日本語名 (英語名)"）を日本語と英語（括弧なし）に分離する
@@ -430,7 +489,7 @@ function initPointerDrag(cardElement, card, dragInfo, onContextMenu) {
 }
 
 /**
- * カードDOM生成 (高精細レンダリング・安全フォールバック対応・日英独立適正リサイズ)
+ * カードDOM生成 (実測幅自動リサイズ・外側バッジ見切れ防止完全版)
  */
 export function createCardElement(card, options = {}) {
     const div = document.createElement('div');
@@ -469,30 +528,9 @@ export function createCardElement(card, options = {}) {
         tribeClass += ' race-long';
     }
 
-    // 修正要件2: 日本語・英語の独立適正リサイズ判定
+    // カード名の日英分離および実測幅に基づく動的スケーリングスタイルの算出
     const nameParts = splitCardName(card.name);
-    const jaLen = nameParts.ja.length;
-    const enLen = nameParts.en.length;
-
-    // 日本語側の個別縮小クラス判定 (内幅116pxに対し約10〜11文字までは基本サイズで余裕あり)
-    let jaClass = '';
-    if (jaLen >= 18) {
-        jaClass = 'ja-ultra-long';
-    } else if (jaLen >= 15) {
-        jaClass = 'ja-very-long';
-    } else if (jaLen >= 12) {
-        jaClass = 'ja-long';
-    }
-
-    // 英語側の個別縮小クラス判定 (プロポーショナル文字幅を考慮し、24文字までは基本サイズを維持)
-    let enClass = '';
-    if (enLen >= 36) {
-        enClass = 'en-ultra-long';
-    } else if (enLen >= 30) {
-        enClass = 'en-very-long';
-    } else if (enLen >= 25) {
-        enClass = 'en-long';
-    }
+    const { styleJa, styleEn } = calculateFittedNameStyles(nameParts.ja, nameParts.en);
 
     const shouldApplyBuff = (
         options.area === 'hand' ||
@@ -516,7 +554,7 @@ export function createCardElement(card, options = {}) {
       <div class="${tribeClass}">${card.tribe}</div>
     </div>
 
-    <!-- ② イラスト領域 -->
+    <!-- ② イラスト領域 (完全整数120px×90px・画像切り抜き) -->
     <div class="card-art-container">
       <img class="card-art-image" src="${primarySrc}" alt="${escapeHtml(nameParts.ja)}"
            draggable="false" ondragstart="return false;"
@@ -524,19 +562,21 @@ export function createCardElement(card, options = {}) {
       <div class="card-art-fallback" style="display: none;">
         ${elemSvg}
       </div>
-      <div class="card-art-overlay">
-        ${starOverlayHtml}
-        ${kaiOverlayHtml}
-      </div>
     </div>
 
-    <!-- ③ カード名プレート (日本語・英語の独立フォント制御・はみ出し時のみ縮小) -->
+    <!-- バッジオーバーレイ (イラストコンテナ外側に配置し吹き出し見切れを防止) -->
+    <div class="card-art-overlay">
+      ${starOverlayHtml}
+      ${kaiOverlayHtml}
+    </div>
+
+    <!-- ③ カード名プレート (実測幅に基づく動的自動リサイズ表示) -->
     <div class="card-name-bar">
-      <span class="card-name-ja ${jaClass}">${escapeHtml(nameParts.ja)}</span>
-      ${nameParts.en ? `<span class="card-name-en ${enClass}">${escapeHtml(nameParts.en)}</span>` : ''}
+      <span class="card-name-ja" style="${styleJa}">${escapeHtml(nameParts.ja)}</span>
+      ${nameParts.en ? `<span class="card-name-en" style="${styleEn}">${escapeHtml(nameParts.en)}</span>` : ''}
     </div>
 
-    <!-- ④ 最下部スタッツバー (❤ ⚔ ⚡：数値のみ緑色) -->
+    <!-- ④ 最下部スタッツバー (❤ ⚔ ⚡：攻撃アイコンは#fde047、数値のみ緑色) -->
     <div class="card-stats-footer">
       <div class="stat-unit hp" title="HP">
         <span class="icon">❤</span><span class="val ${hpBuffClass}">${stats.hp}</span>
@@ -550,6 +590,7 @@ export function createCardElement(card, options = {}) {
     </div>
   `;
 
+    // ロックアイコン（カード右上外側に飛び出す配置を保ちつつ完全表示）
     if (options.isLocked) {
         const lockBadge = document.createElement('div');
         lockBadge.className = 'card-lock-badge';
