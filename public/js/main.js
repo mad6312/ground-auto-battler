@@ -420,7 +420,7 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
     }
 
     // ③ 手札カード上へのドロップ (手札カード同士の合成)
-    const targetCardEl = dropTarget ? dropTarget.closest('.card-item') : null;
+    const targetCardEl = dropTarget ? dropTarget.closest('#player-hand .card-item') : null;
     if (targetCardEl && targetCardEl.__cardData && targetCardEl.__cardData.uid !== dragData.card.uid) {
         const targetCard = targetCardEl.__cardData;
 
