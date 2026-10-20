@@ -1137,7 +1137,7 @@ body {
 }
 
 /* ============================================================
-   3. 刷新版カードデザイン (外側バッジ見切れ防止・完全版)
+   3. 刷新版カードデザイン (高解像度クッキリ描画・外側バッジ完全版)
    ============================================================ */
 .card-item {
     width: 124px;
@@ -1284,7 +1284,7 @@ body {
     letter-spacing: -0.2px;
 }
 
-/* ② イラスト領域 */
+/* ② イラスト領域 (完全整数120px×90px・画像切り抜き) */
 .card-art-container {
     width: 120px;
     height: 90px;
@@ -1295,10 +1295,10 @@ body {
     background: radial-gradient(circle at center, rgba(30, 41, 59, 0.5) 0%, rgba(10, 15, 25, 0.95) 100%);
     border: none !important;
     margin: 0 auto;
-    contain: paint;
     cursor: inherit;
 }
 
+/* イラスト画像 (GPUテクスチャキャッシュぼやけ解除 ＆ クッキリ鮮明化補正) */
 .card-art-image {
     width: 100%;
     height: 100%;
@@ -1308,8 +1308,8 @@ body {
     -webkit-user-drag: none !important;
     pointer-events: none !important;
     image-rendering: auto;
-    transform: translateZ(0);
-    backface-visibility: hidden;
+    /* 縮小時のエッジ引き締め・発色クッキリ補正 */
+    filter: contrast(1.05) saturate(1.03) brightness(1.01);
 }
 
 .card-art-fallback {
