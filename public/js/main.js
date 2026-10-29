@@ -1,7 +1,7 @@
 /**
  * public/js/main.js
  * クライアント側メインエントリーモジュール
- * (全画像バックグラウンドプリロード・チラつき根絶・完全版)
+ * (陳列カード誤ドロップ防止・完全安全版)
  */
 
 import {
@@ -52,7 +52,6 @@ const hudOpponentSection = document.getElementById('hud-opponent-section');
 
 // ============================================================
 // 全180種類カード画像のバックグラウンド・プリローダー
-// (リロール時の一瞬黒くなるチラつきを完全根絶)
 // ============================================================
 let isPreloadStarted = false;
 function preloadAllCardImages() {
@@ -72,7 +71,6 @@ function preloadAllCardImages() {
         }
     }
 
-    // ブラウザのUI描画を一切ブロックしないよう同時並列4本で順次キャッシュ
     const CONCURRENCY = 4;
     let cursor = 0;
 
@@ -91,7 +89,6 @@ function preloadAllCardImages() {
     }
 }
 
-// ページロード時および接続時にアイドル時間を利用して先読み開始
 if (typeof requestIdleCallback !== 'undefined') {
     requestIdleCallback(() => preloadAllCardImages(), { timeout: 2000 });
 } else {
@@ -361,7 +358,7 @@ function triggerRoundStartPopupAndDistribute(roundNumber, activePlayersCount) {
 }
 
 // ============================
-// カスタムポインタードラッグのドロップ処理
+// カスタムポインタードラッグのドロップ処理 (ドロップ判定厳格化)
 // ============================
 setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
     if (!dragData) return;
@@ -419,11 +416,13 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
         return;
     }
 
-    // ③ 手札カード上へのドロップ (手札カード同士の合成)
-    const targetCardEl = dropTarget ? dropTarget.closest('#player-hand .card-item') : null;
-    if (targetCardEl && targetCardEl.__cardData && targetCardEl.__cardData.uid !== dragData.card.uid) {
-        const targetCard = targetCardEl.__cardData;
+    // ③ 【重要修正】手札内のカード上へのドロップ判定（#player-hand 内のカードに限定）
+    // ショップや市場の陳列カードへの誤ドロップによる暴発購入や不正uid混入を完全遮断
+    const targetHandCardEl = dropTarget ? dropTarget.closest('#player-hand .card-item') : null;
+    if (targetHandCardEl && targetHandCardEl.__cardData && targetHandCardEl.__cardData.uid !== dragData.card.uid) {
+        const targetCard = targetHandCardEl.__cardData;
 
+        // 出撃枠から手札カードの上にドロップした場合（入れ替え）
         if (dragData.type === 'deploy') {
             state.localDeploySlots[dragData.slotIndex] = targetCard.uid;
             renderHand(syncLineupChanges);
@@ -432,6 +431,7 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
             return;
         }
 
+        // 手札カード同士のドロップ（合成）
         if (dragData.type === 'hand') {
             socket.emit('card:synthesizeEx', {
                 baseUid: targetCard.uid,
@@ -440,6 +440,7 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
             return;
         }
 
+        // ショップカードを手札カードの上にドロップ（通常購入）
         if (dragData.type === 'shop') {
             state.pendingHandDropAnim = { x: dropPoint.x, y: dropPoint.y };
             setTimeout(() => { state.pendingHandDropAnim = null; }, 3000);
@@ -493,6 +494,8 @@ setCustomDropHandler((dropTarget, dragData, clientX, clientY) => {
             }
         }
     }
+
+    // 上記いずれにも該当しない領域（ショップ枠内でのキャンセル等）は安全に操作中止
 });
 
 // ============================
